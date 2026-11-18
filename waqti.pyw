@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 21
-CHANGES = ("اللاعب صار يقدر ينربط بأكثر من حساب (مثلاً يوسف في حسابك وحساب أخوك).\n"
-           "وحسابك (بدون حد) إذا فيه لاعبين: تطلع أسماءهم + زر «أنا الكبير».")
+VERSION = 22
+CHANGES = "الوقت صار خانتين تحت بعض: ساعات ودقايق (مثلاً 0 ساعة و 1 دقيقة، أو 2 ساعة و 30 دقيقة)."
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -345,6 +344,16 @@ def parse_hours(text):
     t = text.strip().translate(str.maketrans("٠١٢٣٤٥٦٧٨٩٫،,", "0123456789...")).replace("ساعة", "").replace("ساعات", "").strip()
     try:
         return int(round(float(t) * 60))
+    except ValueError:
+        return None
+
+
+def hm_minutes(h, m):
+    """ساعات + دقايق من خانتين → دقايق. يرجع None إذا غلط"""
+    tr = str.maketrans("٠١٢٣٤٥٦٧٨٩٫", "0123456789.")
+    h, m = (h or "0").strip().translate(tr) or "0", (m or "0").strip().translate(tr) or "0"
+    try:
+        return int(round(float(h) * 60 + float(m)))
     except ValueError:
         return None
 
@@ -1715,15 +1724,16 @@ class App:
                                "حساب ويندوز اختياري: إذا دخل حسابه، يبدأ وقته على طول.",
                                [("حفظ", True), ("إلغاء", None)],
                                fields=[("الاسم", p["name"] if p else "", False),
-                                       ("كم ساعة باليوم", hours_num(p["daily_minutes"]) if p else "2", False),
+                                       ("ساعات باليوم", (int(p["daily_minutes"]) // 60) if p else 2, False),
+                                       ("ودقايق", (int(p["daily_minutes"]) % 60) if p else 0, False),
                                        ("رمز اللاعب", KEEP if p and p.get("pin") else "", False),
                                        ("حساب ويندوز حقه", p.get("windows_user", "") if p else "", False)])
             if not v:
                 return
-            name, mins, pin, winuser = vals[0].strip(), vals[1].strip(), vals[2].strip(), vals[3].strip().lower()
-            mins = parse_hours(mins)
+            name, pin, winuser = vals[0].strip(), vals[3].strip(), vals[4].strip().lower()
+            mins = hm_minutes(vals[1], vals[2])
             if not name or mins is None or mins < 0 or mins > 24 * 60:
-                self.info("خطأ", "اكتب اسم، والساعات لازم تكون رقم (مثلاً 2 أو 1.5).")
+                self.info("خطأ", "اكتب اسم، والساعات والدقايق لازم تكون أرقام.")
                 return
             if any(q["name"] == name and q is not p for q in self.cfg["players"]):
                 self.info("خطأ", "فيه لاعب بنفس الاسم.")
@@ -1766,17 +1776,17 @@ class App:
             p = selected()
             if not p:
                 return
-            v, vals = self.ask("تعديل وقت اليوم",
-                               f"كم ساعة تضيف لـ {p['name']}؟ (مثلاً 1 أو 0.5. وحط سالب عشان تنقص، مثلاً -0.5)",
-                               [("تم", True), ("إلغاء", None)], fields=[("الساعات", "1", False)])
+            v, vals = self.ask("زيادة / نقص وقت",
+                               f"كم تضيف لـ {p['name']}؟\nاختر «زيادة» أو «نقص».",
+                               [("زيادة", 1), ("نقص", -1), ("إلغاء", None)],
+                               fields=[("ساعات", "0", False), ("ودقايق", "15", False)])
             if not v:
                 return
-            m = parse_hours(vals[0].replace("-", "")) if vals[0].strip() else None
+            m = hm_minutes(vals[0].replace("-", ""), vals[1].replace("-", ""))
             if not m:
-                self.info("خطأ", "اكتب رقم، مثلاً 1 أو 0.5.")
+                self.info("خطأ", "اكتب أرقام، مثلاً 1 ساعة و 30 دقيقة.")
                 return
-            if vals[0].strip().startswith("-"):
-                m = -m
+            m = m * v
             self.grant(p["name"], m, "admin" if m > 0 else "adjust")
             refresh_lb()
 
