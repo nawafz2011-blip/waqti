@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 11
-CHANGES = "«ريست الدور» صار «ريست الوقت»: يرجع وقت الشخص كامل، بالرمز أو بموافقة المنظم من الجوال."
+VERSION = 12
+CHANGES = ("«ما أحد صاحي» صار وقت مفتوح لين تضغط «إنهاء» أو تطلع من الحساب، وبعدها وقتك يصير صفر.\n"
+           "وأول ما يلعب الكل دوره، الكل يرجع له وقته كامل تلقائياً.")
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
@@ -282,6 +283,8 @@ def hours_num(minutes):
 def dur(minutes):
     """مدة بالكلام: ساعة، ساعتين، 3 ساعات، نص ساعة، ساعة و 15 دقيقة"""
     m = abs(int(minutes))
+    if m == 0:
+        return "أقل من دقيقة"
     h, r = divmod(m, 60)
     hs = {0: "", 1: "ساعة", 2: "ساعتين"}.get(h, f"{h} ساعات" if h <= 10 else f"{h} ساعة")
     if r == 0:
@@ -623,7 +626,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -779,6 +782,7 @@ class App:
         r.overrideredirect(True)
         r.attributes("-topmost", True)
         r.protocol("WM_DELETE_WINDOW", lambda: None)
+        r.protocol("WM_SAVE_YOURSELF", self.on_logoff)   # ويندوز يرسلها لما يطلع من الحساب
         x, y, w, h = screen_geom(r)
         r.geometry(f"{w}x{h}+{x}+{y}")
 
@@ -815,7 +819,9 @@ class App:
         cols = 4
         for i, p in enumerate(self.cfg["players"]):
             rem = self.remaining(p["name"])
-            if not self.can_play(p["name"]):
+            if self.is_open(p["name"]):
+                txt, color = f'{p["name"]}\nوقت مفتوح', WARN
+            elif not self.can_play(p["name"]):
                 txt, color = f'{p["name"]}\nلعب هالدور ✓', DIM
             elif rem > 0:
                 txt, color = f'{p["name"]}\nباقي {fmt(rem)}', ACCENT
@@ -877,7 +883,7 @@ class App:
             left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
             self.info("مو دورك", f"{name}، لعبت هالدور.\nباقي يلعبون: {'، '.join(left)}")
             return
-        if self.remaining(name) <= 0:
+        if self.remaining(name) <= 0 and not self.is_open(name):
             self.extension_flow(name, from_lock=True)
             self.refresh_lock()
             return
@@ -893,6 +899,37 @@ class App:
             return True
         return set(self.turn_players()) <= set(r)     # الكل لعب = دور جديد
 
+    def is_open(self, name):
+        return name in (self.state.get("open") or {})
+
+    def end_open(self, name):
+        """نهاية الوقت المفتوح: الوقت يصير صفر"""
+        p = self.player(name)
+        base = int(p["daily_minutes"]) * 60 if p else 0
+        started = (self.state.get("open") or {}).get(name, time.time())
+
+        def op(st):
+            st.setdefault("open", {}).pop(name, None)
+            st.setdefault("used", {})[name] = base + st.setdefault("bonus", {}).get(name, 0)
+        self.state_op(op)
+        self.log("open_end", f"{name} أنهى الوقت المفتوح («ما أحد صاحي») بعد {dur(int((time.time() - started) // 60))}، "
+                             "ووقته صار صفر", name, notify=True)
+
+    def check_round_done(self):
+        """الكل لعب دوره = دور جديد والكل يرجع له وقته كامل"""
+        allp = set(self.turn_players())
+        if not allp or not allp <= set(self.state.get("round", [])):
+            return
+        if any(self.state.get("active_by", {}).values()) or self.active:
+            return   # أحد لسا يلعب في حساب ثاني
+
+        def op(st):
+            st["round"] = []
+            st["used"] = {}
+            st["bonus"] = {}
+        self.state_op(op)
+        self.log("round", "🔄 الكل لعب دوره: دور جديد، والكل رجع له وقته كامل", notify=True)
+
     def take_turn(self, name):
         allp = set(self.turn_players())
         info = {}
@@ -901,12 +938,14 @@ class App:
             r = st.setdefault("round", [])
             if r and allp <= set(r) and r[-1] != name:
                 r.clear()
+                st["used"] = {}
+                st["bonus"] = {}
                 info["new"] = True
             if name not in r:
                 r.append(name)
         self.state_op(op)
         if info.get("new"):
-            self.log("round", "🔄 الكل لعب، بدأ دور جديد")
+            self.log("round", "🔄 الكل لعب دوره: دور جديد، والكل رجع له وقته كامل", notify=True)
 
     def reset_flow(self, who=None):
         who = who or self.active or self.linked_player()
@@ -1028,11 +1067,23 @@ class App:
             self.close_session()
 
     def close_session(self):
+        name = self.active
         self.active = None
         self.grace_left = None
         self.state["active"] = None
         self.save_state()
+        if name and self.is_open(name):
+            self.end_open(name)
+        self.check_round_done()
         self.show_lock()
+
+    def on_logoff(self):
+        """ويندوز يطلع من الحساب أو يطفي: ننهي الجلسة صح"""
+        if self.active:
+            self.log("logoff", f"{self.active} طلع من حساب ويندوز", self.active)
+            self.close_session()
+        else:
+            self.save_state()
 
     def lock_now(self):
         name = self.active
@@ -1043,11 +1094,10 @@ class App:
     def extension_flow(self, name, from_lock=False):
         nb_used = self.state["nobody"].get(name, 0)
         nb_max = int(self.cfg["nobody_awake_per_day"])
-        nb_min = int(self.cfg["nobody_awake_minutes"])
         left = nb_max - nb_used
         v, _ = self.ask("وقت إضافي", f"{name} يبي وقت إضافي. كيف؟",
                         [("موافقة الكبير (بالرمز)", "admin"),
-                         (f"ما أحد صاحي ({dur(nb_min)})", "nobody"),
+                         ("ما أحد صاحي (وقت مفتوح)", "nobody"),
                          ("إلغاء", None)])
         if v == "admin":
             if not self.check_admin("الكبير يكتب رمزه عشان يوافق على الوقت الإضافي"):
@@ -1064,18 +1114,27 @@ class App:
                 self.info("ما يصير", f"استخدمت خيار «ما أحد صاحي» {nb_used} مرة اليوم وهذا الحد.\n"
                                      "انتظر لين أحد يصحى. وانكتبت المحاولة في السجل.")
                 return
-            ok, _ = self.ask("متأكد؟",
-                             f"بتاخذ {dur(nb_min)}.\n"
-                             "بتوصل رسالة للكل، وتنكتب في السجل باسمك والساعة.\n"
-                             f"بعدها يبقى لك {left - 1} مرة اليوم.",
+            ok, _ = self.ask("متأكد ما أحد صاحي؟",
+                             "الوقت يصير مفتوح لين تضغط «إنهاء» أو تطلع من الحساب، وبعدها وقتك يصير صفر.\n"
+                             "بتوصل رسالة للكل، وتنكتب في السجل باسمك والساعة.",
                              [("إيه، متأكد", "yes"), ("لا", None)])
             if not ok:
                 return
-            self.grant(name, nb_min, "nobody")
+            self.open_time(name)
         else:
             return
-        if from_lock and not self.active and self.remaining(name) > 0:
+        if from_lock and not self.active and (self.remaining(name) > 0 or self.is_open(name)):
             self.start_session(name)
+
+    def open_time(self, name):
+        def op(st):
+            st.setdefault("open", {})[name] = time.time()
+            st.setdefault("nobody", {})[name] = st["nobody"].get(name, 0) + 1
+        self.state_op(op)
+        self.log("extra_nobody", f"⚠️ {name} فتح الوقت بخيار «ما أحد صاحي»", name, notify=True)
+        if self.active == name:
+            self.grace_left = None
+            self.update_timer_ui()
 
     def grant(self, name, minutes, by):
         self.state["bonus"][name] = self.state["bonus"].get(name, 0) + minutes * 60
@@ -1135,6 +1194,12 @@ class App:
         if not self.active:
             return
         self.t_name.configure(text=self.active)
+        if self.is_open(self.active):
+            started = self.state["open"][self.active]
+            self.t_status.configure(text="وقت مفتوح (ما أحد صاحي) · له")
+            self.t_time.configure(text=fmt(time.time() - started), fg=WARN)
+            self.timer.configure(highlightbackground=WARN)
+            return
         if self.grace_left is None:
             rem = self.remaining(self.active)
             warn = rem <= int(self.cfg["warn_minutes"]) * 60
@@ -1191,6 +1256,8 @@ class App:
                     self.state["used"][name] = self.state["used"].get(name, 0) + dt
                     rem = self.remaining(name)
                     warn_s = int(self.cfg["warn_minutes"]) * 60
+                    if self.is_open(name):
+                        rem = 10 ** 9      # وقت مفتوح: ما ينتهي
                     if not self.warned and 0 < rem <= warn_s:
                         self.warned = True
                         self.toast("تنبيه", f"{name}، باقي لك {fmt(rem)} بس.")
@@ -1493,7 +1560,6 @@ class App:
         gf.pack(fill="x")
         fields = [("grace_minutes", "المهلة بعد ما يخلص الوقت (دقايق)"),
                   ("warn_minutes", "تنبيه قبل نهاية الوقت (دقايق)"),
-                  ("nobody_awake_minutes", "وقت خيار «ما أحد صاحي» (دقايق)"),
                   ("nobody_awake_per_day", "كم مرة «ما أحد صاحي» باليوم لكل واحد"),
                   ("day_start_hour", "اليوم الجديد يبدأ الساعة (0-23)"),
                   ("telegram_token", "تيليجرام: توكن البوت"),
