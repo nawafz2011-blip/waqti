@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 26
-CHANGES = ("جديد في رابط المنظم: «🔑 تغيير الرمز» من جوالك.\n"
-           "وحماية: 5 محاولات رمز غلط من الجوال تقفل أوامر الجوال 15 دقيقة.")
+VERSION = 27
+CHANGES = "تصليح: قسم «🎮 الحين» في رابط المنظم صار يتحدث حتى لو الكمبيوتر على حساب الكبير."
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1690,6 +1689,14 @@ class App:
             if getattr(self, "pending_req", None) and int(time.time()) % 3 == 0:
                 self.poll_reset()
             if self.free:
+                self.save_tick += 1
+                if self.save_tick >= 10:      # حساب الكبير: نتزامن ونرسل الحالة للمنظم بس
+                    self.save_tick = 0
+                    self.save_state()
+                    self.cfg = load_config()
+                    self.publish_roster()
+                    self.publish_status()
+                    self.check_week()
                 self.root.after(1000, self.tick)
                 return
             if self.ensure_today():

@@ -296,6 +296,8 @@
     fetch(stt + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(gotStatus).catch(function () {});
     try { var ses = new EventSource(stt + "/sse"); ses.onmessage = function (e) { gotStatus(e.data); }; } catch (e) {}
     setInterval(drawNow, 30000);
+    nowS.hidden = false;
+    nowl.innerHTML = '<div class="nowt">ننتظر أول تحديث من الكمبيوتر… (يوصل خلال دقيقة لو البرنامج شغال ونسخته 27 أو أكثر)</div>';
     var rkey = "waqti-roster-" + admin, saved = [];
     try { saved = JSON.parse(localStorage.getItem(rkey) || "[]"); } catch (e) {}
     var fromLink = (q.get("p") || "").split(",").filter(Boolean);
