@@ -282,7 +282,9 @@
         var r = document.createElement("div"); r.className = "nr";
         var n = document.createElement("span"); n.className = "n"; n.textContent = p.name;
         var c = document.createElement("span"); c.className = "chip2 c-" + p.state;
-        c.textContent = { playing: "🟢 يلعب · باقي " + hmLeft(left), open: "🟠 وقت مفتوح", blocked: "🚫 ممنوع",
+        var endAt = new Date(Date.now() + left * 1000);
+        var endTxt = " · ينتهي " + endAt.getHours() + ":" + ("0" + endAt.getMinutes()).slice(-2);
+        c.textContent = { playing: "🟢 يلعب · باقي " + hmLeft(left) + endTxt, open: "🟠 وقت مفتوح", blocked: "🚫 ممنوع",
                           done: "خلص وقته", idle: "باقي " + hmLeft(left) }[p.state] || "";
         r.appendChild(n); r.appendChild(c); nowl.appendChild(r);
       });
