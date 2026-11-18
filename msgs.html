@@ -207,14 +207,19 @@
 
   if (admin) {
     document.getElementById("sub").textContent = "👑 المنظم · رسائل البيت وطلبات الريست";
-    var people = (q.get("p") || "").split(",").filter(Boolean);
     var ctl = document.getElementById("ctl"), ppl = document.getElementById("ppl"), ask = document.getElementById("ask");
     var askt = document.getElementById("askt"), pinI = document.getElementById("pin"), st = document.getElementById("st");
-    var pending = null;
+    var pending = null, shownKey = null;
     ctl.hidden = false;
-    if (!people.length) {
-      ppl.innerHTML = '<div class="st bad">رابطك قديم وما فيه الأسماء. خذ «رابط المنظم» من جديد من إعدادات البرنامج.</div>';
-    }
+    function showPeople(people) {
+      var key = people.join(",");
+      if (key === shownKey) return;
+      shownKey = key;
+      ppl.innerHTML = "";
+      if (!people.length) {
+        ppl.innerHTML = '<div class="st">ننتظر الأسماء من الكمبيوتر… (لازم البرنامج يكون شغال)</div>';
+        return;
+      }
     people.forEach(function (n) {
       var r = document.createElement("div"); r.className = "pr";
       var nm = document.createElement("span"); nm.className = "n"; nm.textContent = n;
@@ -239,6 +244,19 @@
       };
       ppl.appendChild(all);
     }
+    }
+    var rkey = "waqti-roster-" + admin, saved = [];
+    try { saved = JSON.parse(localStorage.getItem(rkey) || "[]"); } catch (e) {}
+    var fromLink = (q.get("p") || "").split(",").filter(Boolean);
+    showPeople(saved.length ? saved : fromLink);
+    function gotRoster(txt) {
+      var last = null;
+      txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") last = JSON.parse(m.message).roster; } catch (e) {} });
+      if (last && last.length) { try { localStorage.setItem(rkey, JSON.stringify(last)); } catch (e) {} showPeople(last); }
+    }
+    var rt = "https://ntfy.sh/" + encodeURIComponent(admin + "-roster");
+    fetch(rt + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(gotRoster).catch(function () {});
+    try { var res = new EventSource(rt + "/sse"); res.onmessage = function (e) { gotRoster(JSON.stringify(JSON.parse(e.data))); }; } catch (e) {}
     document.getElementById("cancel").onclick = function () { ask.hidden = true; pending = null; };
     function sha(sv) { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(sv)).then(function (b) {
       return Array.prototype.map.call(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); }); }

@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 23
-CHANGES = "جديد في رابط المنظم: «ريست وقته» جنب كل اسم، و«ريست للكل» (دور جديد والكل يرجع له وقته)."
+VERSION = 24
+CHANGES = ("رابط المنظم صار ثابت للأبد: الأسماء توصل للموقع من البرنامج بروحه.\n"
+           "خذ الرابط من الإعدادات مرة أخيرة، وبعدها ما يتغير حتى لو أضفت لاعب.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -279,6 +280,18 @@ def ntfy_admin_send(cfg, title, text, click=None, topic=None):
                 body["actions"] = [{"action": "view", "label": "افتح ووافق", "url": click}]
             req = urllib.request.Request("https://ntfy.sh/", data=json.dumps(body).encode("utf-8"),
                                          method="POST", headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=15).close()
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
+
+
+def ntfy_publish_raw(topic, body):
+    """رسالة صامتة (بدون إشعار) لقناة معينة"""
+    def run():
+        try:
+            req = urllib.request.Request(f"https://ntfy.sh/{topic}", data=body.encode("utf-8"), method="POST",
+                                         headers={"Priority": "1"})
             urllib.request.urlopen(req, timeout=15).close()
         except Exception:
             pass
@@ -1263,6 +1276,15 @@ class App:
                 self._polling = False
         threading.Thread(target=run, daemon=True).start()
 
+    def publish_roster(self, force=False):
+        """أسماء اللاعبين لموقع المنظم (عشان رابط المنظم يبقى ثابت)"""
+        names = [p["name"] for p in self.cfg["players"]]
+        last = getattr(self, "_roster_sent", (None, 0))
+        if not force and last[0] == names and time.time() - last[1] < 6 * 3600:
+            return
+        self._roster_sent = (names, time.time())
+        ntfy_publish_raw(self.cfg["admin_topic"] + "-roster", json.dumps({"roster": names}, ensure_ascii=False))
+
     # ---------- أوامر المنظم من الجوال (طلّعه / اسمح له)
     def poll_cmds(self):
         if getattr(self, "_cmd_polling", False):
@@ -1626,6 +1648,7 @@ class App:
                 if not self.active and not self.dialogs:
                     self.cfg = load_config()
                     self.refresh_lock()
+                self.publish_roster()
         except Exception as ex:  # ما نبي البرنامج يطيح
             print("tick error:", ex)
         self.root.after(1000, self.tick)
@@ -2049,8 +2072,7 @@ class App:
                         "لا تعطيه أحد. (ولو تبي إشعار يرن: تطبيق ntfy ← + ← اكتب: "
                         f"{self.cfg['admin_topic']})",
                         [("تجربة", "test"), ("إغلاق", None)],
-                        fields=[("الرابط", msgs_link(self.cfg) + "&a=" + self.cfg["admin_topic"] + "&p="
-                                 + urllib.parse.quote(",".join(p["name"] for p in self.cfg["players"])), False)])
+                        fields=[("الرابط", msgs_link(self.cfg) + "&a=" + self.cfg["admin_topic"], False)])
         if v == "test":
             ntfy_admin_send(self.cfg, "وقتي", "رسالة تجربة للمنظم ✅")
             self.info("انرسلت", "إذا مشترك في القناة، المفروض وصلتك.")
