@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b1220">
+<title>وقتي · رسائل البيت</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=Readex+Pro:wght@600;700&display=swap">
+<style>
+  :root {
+    --bg:#0b1220; --card:#141d2f; --line:#22304a; --fg:#eef2f8; --muted:#8fa0bb;
+    --blue:#5b8cff; --green:#34d399; --amber:#fbbf24; --red:#f87171; --purple:#c084fc;
+    --display:"Readex Pro","IBM Plex Sans Arabic",Tahoma,sans-serif; --body:"IBM Plex Sans Arabic",Tahoma,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--body); }
+  .wrap { max-width:640px; margin:0 auto; padding:20px 16px 48px; display:flex; flex-direction:column; gap:18px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  h1 { margin:0; font-family:var(--display); font-size:1.7rem; }
+  .sub { color:var(--muted); font-size:.95rem; margin-top:2px; }
+  .live { display:flex; align-items:center; gap:8px; font-size:.85rem; color:var(--muted); background:var(--card);
+          border:1px solid var(--line); padding:6px 12px; border-radius:999px; white-space:nowrap; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--green); box-shadow:0 0 0 0 rgba(52,211,153,.6); animation:pulse 2s infinite; }
+  .dot.off { background:var(--muted); animation:none; }
+  @keyframes pulse { 70% { box-shadow:0 0 0 8px rgba(52,211,153,0); } 100% { box-shadow:0 0 0 0 rgba(52,211,153,0); } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation:none; } }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; }
+  .chip { font:inherit; font-size:.9rem; color:var(--muted); background:transparent; border:1px solid var(--line);
+          border-radius:999px; padding:6px 14px; cursor:pointer; }
+  .chip[aria-pressed="true"] { color:var(--bg); background:var(--fg); border-color:var(--fg); font-weight:600; }
+  #list { display:flex; flex-direction:column; gap:10px; }
+  .day { color:var(--muted); font-size:.85rem; font-weight:600; margin:8px 4px 0; }
+  ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+  li { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px;
+       display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:start; }
+  .ic { width:38px; height:38px; border-radius:10px; display:grid; place-items:center; font-size:1.15rem; background:rgba(255,255,255,.06); }
+  .t { line-height:1.7; min-width:0; overflow-wrap:anywhere; }
+  .meta { color:var(--muted); font-size:.8rem; text-align:left; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .k-warn .ic { background:rgba(251,191,36,.14); } .k-bad .ic { background:rgba(248,113,113,.14); }
+  .k-good .ic { background:rgba(52,211,153,.14); } .k-info .ic { background:rgba(91,140,255,.14); }
+  .k-law .ic { background:rgba(192,132,252,.14); }
+  .note { color:var(--amber); font-size:.85rem; background:rgba(251,191,36,.08); border:1px solid rgba(251,191,36,.25);
+          border-radius:10px; padding:8px 12px; }
+  .empty { color:var(--muted); text-align:center; padding:40px 16px; border:1px dashed var(--line); border-radius:14px; }
+  footer { color:var(--muted); font-size:.8rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>⏱ وقتي</h1>
+      <div class="sub">رسائل البيت · للقراءة بس</div>
+    </div>
+    <div class="live" id="live"><span class="dot" id="dot"></span><span id="livetxt">مباشر</span></div>
+  </header>
+
+  <div class="chips" role="group" aria-label="فلتر">
+    <button class="chip" data-f="all" aria-pressed="true">الكل</button>
+    <button class="chip" data-f="warn" aria-pressed="false">⚠️ تنبيهات</button>
+    <button class="chip" data-f="extra" aria-pressed="false">وقت إضافي</button>
+    <button class="chip" data-f="round" aria-pressed="false">الدور والريست</button>
+  </div>
+
+  <div id="note" class="note" hidden></div>
+  <div id="list"></div>
+  <footer>آخر 12 ساعة · السجل الكامل في البرنامج</footer>
+</div>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var topic = q.get("t"), pk = q.get("k");
+  var hidden = 0, keyP = null;
+  function unhex(h) { var a = new Uint8Array(h.length / 2); for (var i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16); return a; }
+  if (pk && window.crypto && crypto.subtle) {
+    keyP = crypto.subtle.importKey("raw", unhex(pk), { name: "Ed25519" }, false, ["verify"]).catch(function () { return null; });
+  }
+  function genuine(ev) {
+    if (!pk) return Promise.resolve(true);
+    if (!keyP) return Promise.resolve(false);
+    var hp = (ev.click || "").split("#")[1] || "", hq = new URLSearchParams(hp);
+    var sig = hq.get("s"), ts = parseInt(hq.get("ts") || "0", 10);
+    if (!sig || sig.length !== 128 || Math.abs(ts - ev.time) > 600) return Promise.resolve(false);
+    return keyP.then(function (key) {
+      if (!key) return false;
+      return crypto.subtle.verify({ name: "Ed25519" }, key, unhex(sig), new TextEncoder().encode(ts + "|" + ev.message));
+    }).catch(function () { return false; });
+  }
+  var list = document.getElementById("list"), dot = document.getElementById("dot"), livetxt = document.getElementById("livetxt");
+  var msgs = [], seen = {}, filter = "all";
+
+  function kind(text) {
+    if (/⛔|🔒|❌/.test(text)) return "bad";
+    if (/⚖️/.test(text)) return "law";
+    if (/⚠️|⏰/.test(text)) return "warn";
+    if (/✅/.test(text)) return "good";
+    return "info";
+  }
+  function icon(text) {
+    var m = text.match(/^(⛔|🔒|⚖️|⚠️|⏰|✅|🔄|📨)/);
+    return m ? m[1] : "⏱";
+  }
+  function group(text) {
+    if (/دور|ريست/.test(text)) return "round";
+    if (/إضافي|ما أحد صاحي|الوقت المفتوح/.test(text)) return "extra";
+    if (kind(text) === "warn" || kind(text) === "bad" || kind(text) === "law") return "warn";
+    return "other";
+  }
+  function clean(m) {
+    return (m || "").replace(/^⏱ وقتي\n/, "").replace(/\nالساعة \d\d:\d\d$/, "").trim();
+  }
+  function hm(ts) { var d = new Date(ts * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); }
+  function dayName(ts) {
+    var d = new Date(ts * 1000), n = new Date(), y = new Date(); y.setDate(n.getDate() - 1);
+    if (d.toDateString() === n.toDateString()) return "اليوم";
+    if (d.toDateString() === y.toDateString()) return "أمس";
+    return d.getDate() + "/" + (d.getMonth() + 1);
+  }
+  function render() {
+    var shown = msgs.filter(function (m) { return filter === "all" || group(m.text) === filter; })
+                    .sort(function (a, b) { return b.time - a.time; });
+    list.innerHTML = "";
+    var note = document.getElementById("note");
+    note.hidden = !hidden;
+    note.textContent = "🛡️ انخفت " + hidden + " رسالة بدون ختم البرنامج (ممكن مزورة).";
+    if (!topic) { list.innerHTML = '<div class="empty">الرابط ناقص. افتحه من «رابط الإشعارات» في البرنامج.</div>'; return; }
+    if (!shown.length) { list.innerHTML = '<div class="empty">ما فيه رسائل للحين. أول ما يصير شي بيطلع هنا.</div>'; return; }
+    var lastDay = null, ul = null;
+    shown.forEach(function (m) {
+      var dn = dayName(m.time);
+      if (dn !== lastDay) {
+        var h = document.createElement("div"); h.className = "day"; h.textContent = dn; list.appendChild(h);
+        ul = document.createElement("ul"); list.appendChild(ul); lastDay = dn;
+      }
+      var li = document.createElement("li"); li.className = "k-" + kind(m.text);
+      var ic = document.createElement("div"); ic.className = "ic"; ic.textContent = icon(m.text);
+      var t = document.createElement("div"); t.className = "t"; t.textContent = m.text.replace(/^(⛔|🔒|⚖️|⚠️|⏰|✅|🔄|📨)\s*/, "");
+      var meta = document.createElement("div"); meta.className = "meta"; meta.textContent = hm(m.time);
+      li.appendChild(ic); li.appendChild(t); li.appendChild(meta); ul.appendChild(li);
+    });
+  }
+  function add(ev) {
+    if (!ev || ev.event !== "message" || seen[ev.id]) return Promise.resolve();
+    seen[ev.id] = 1;
+    return genuine(ev).then(function (ok) {
+      if (ok) msgs.push({ time: ev.time, text: clean(ev.message) });
+      else hidden++;
+    });
+  }
+  document.querySelectorAll(".chip").forEach(function (c) {
+    c.addEventListener("click", function () {
+      filter = c.dataset.f;
+      document.querySelectorAll(".chip").forEach(function (x) { x.setAttribute("aria-pressed", x === c ? "true" : "false"); });
+      render();
+    });
+  });
+  function live(on) { dot.className = on ? "dot" : "dot off"; livetxt.textContent = on ? "مباشر" : "يعيد الاتصال…"; }
+
+  render();
+  if (!topic) { live(false); return; }
+  var base = "https://ntfy.sh/" + encodeURIComponent(topic);
+  fetch(base + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(function (txt) {
+    var jobs = [];
+    txt.split("\n").forEach(function (l) { try { jobs.push(add(JSON.parse(l))); } catch (e) {} });
+    return Promise.all(jobs).then(render);
+  }).catch(function () {});
+  function connect() {
+    var es = new EventSource(base + "/sse");
+    es.onopen = function () { live(true); };
+    es.onmessage = function (e) { try { add(JSON.parse(e.data)).then(render); } catch (x) {} };
+    es.onerror = function () { live(false); };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -31,9 +31,10 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 14
-CHANGES = ("الدور صار ينحسب لما يخلص وقتك بس: تدخل وتطلع براحتك لين يخلص.\n"
-           "وجديد: زر «ريست الدور» (الكل يرجع له وقته) جنب «ريست الوقت».")
+VERSION = 15
+CHANGES = ("رابط الرسائل صار موقع حقنا على GitHub، للقراءة بس، وكل رسالة عليها ختم ما يقدر أحد يزوره.\n"
+           "خذ الرابط الجديد من الإعدادات ← «رابط الإشعارات» وأرسله لإخوانك.")
+MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
@@ -135,13 +136,84 @@ def ntfy_url(cfg):
     return "https://ntfy.sh/" + cfg.get("ntfy_topic", "")
 
 
+# ---- ختم الرسائل (Ed25519): البرنامج يختم، وموقع الرسائل يعرض المختوم بس
+_P = 2 ** 255 - 19
+_L = 2 ** 252 + 27742317777372353535851937790883648493
+_D = -121665 * pow(121666, _P - 2, _P) % _P
+_BY = 4 * pow(5, _P - 2, _P) % _P
+
+
+def _xrecover(y):
+    xx = (y * y - 1) * pow(_D * y * y + 1, _P - 2, _P)
+    x = pow(xx, (_P + 3) // 8, _P)
+    if (x * x - xx) % _P:
+        x = x * pow(2, (_P - 1) // 4, _P) % _P
+    return _P - x if x % 2 else x
+
+
+_BX = _xrecover(_BY)
+_BASE = (_BX, _BY, 1, _BX * _BY % _P)
+
+
+def _padd(a, b):
+    x1, y1, z1, t1 = a
+    x2, y2, z2, t2 = b
+    A = (y1 - x1) * (y2 - x2) % _P
+    B = (y1 + x1) * (y2 + x2) % _P
+    C = t1 * 2 * _D * t2 % _P
+    Dd = z1 * 2 * z2 % _P
+    E, F, G, H = B - A, Dd - C, Dd + C, B + A
+    return (E * F % _P, G * H % _P, F * G % _P, E * H % _P)
+
+
+def _pmul(k, pt):
+    q = (0, 1, 1, 0)
+    while k:
+        if k & 1:
+            q = _padd(q, pt)
+        pt = _padd(pt, pt)
+        k >>= 1
+    return q
+
+
+def _penc(pt):
+    x, y, z, _ = pt
+    zi = pow(z, _P - 2, _P)
+    x, y = x * zi % _P, y * zi % _P
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+
+def ed25519_keys(seed):
+    h = hashlib.sha512(seed).digest()
+    a = int.from_bytes(h[:32], "little")
+    a = (a & ((1 << 254) - 8)) | (1 << 254)
+    return a, h[32:], _penc(_pmul(a, _BASE))
+
+
+def ed25519_sign(seed, msg):
+    a, prefix, pub = ed25519_keys(seed)
+    r = int.from_bytes(hashlib.sha512(prefix + msg).digest(), "little") % _L
+    R = _penc(_pmul(r, _BASE))
+    k = int.from_bytes(hashlib.sha512(R + pub + msg).digest(), "little") % _L
+    return R + ((r + k * a) % _L).to_bytes(32, "little")
+
+
+def msgs_link(cfg):
+    pub = ed25519_keys(bytes.fromhex(cfg["sign_key"]))[2].hex()
+    return f"{MSGS_URL}?t={cfg['ntfy_topic']}&k={pub}"
+
+
 def ntfy_send_sync(cfg, text):
-    """صفحة إشعارات مجانية: أي أحد يفتح الرابط يشوف الرسائل، واللي عنده تطبيق ntfy يجيه إشعار"""
+    """الرسالة تروح لـ ntfy مختومة، وموقعنا على GitHub يعرضها"""
     if not cfg.get("ntfy_topic"):
         return False, "ما فيه رابط"
     try:
-        req = urllib.request.Request(ntfy_url(cfg), data=text.encode("utf-8"), method="POST",
-                                     headers={"Tags": "stopwatch", "Title": "Waqti"})
+        ts = int(time.time())
+        sig = ed25519_sign(bytes.fromhex(cfg["sign_key"]), f"{ts}|{text}".encode("utf-8")).hex()
+        body = {"topic": cfg["ntfy_topic"], "message": text, "title": "وقتي", "tags": ["stopwatch"],
+                "click": f"{msgs_link(cfg)}#s={sig}&ts={ts}"}
+        req = urllib.request.Request("https://ntfy.sh/", data=json.dumps(body).encode("utf-8"), method="POST",
+                                     headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=15) as r:
             return r.status == 200, ""
     except Exception as ex:
@@ -238,6 +310,8 @@ def load_config():
         cfg.setdefault(k, copy.deepcopy(v))
     if not cfg.get("ntfy_topic"):
         cfg["ntfy_topic"] = new_topic()
+    if not cfg.get("sign_key"):
+        cfg["sign_key"] = secrets.token_hex(32)
     if not cfg.get("admin_topic"):
         cfg["admin_topic"] = "waqti-admin-" + secrets.token_hex(6)
     save_json(CONFIG_PATH, cfg)
@@ -853,8 +927,7 @@ class App:
             if len(lines) == 6:
                 break
         self.recent_lbl.configure(text="\n".join(lines) or "ما فيه أحداث")
-        self.link_lbl.configure(text=f"النسخة {VERSION}     ·     الرسائل على الجوال:  "
-                                     + ntfy_url(self.cfg).replace("https://", ""))
+        self.link_lbl.configure(text=f"النسخة {VERSION}     ·     رابط الرسائل: عند الكبير (الإعدادات ← رابط الإشعارات)")
 
     def show_lock(self):
         if self.free:
@@ -1753,11 +1826,11 @@ class App:
     def show_ntfy(self):
         while True:
             v, _ = self.ask("رابط الإشعارات",
-                            "أرسل هالرابط لإخوانك. أي واحد يفتحه من الجوال يشوف كل الرسائل، بدون حساب.\n"
-                            "واللي يبي إشعار يجيه على الجوال: يثبت تطبيق ntfy، ويضغط +، ويكتب اسم الصفحة:\n"
+                            "انسخ الرابط وأرسله لإخوانك. يفتحونه من الجوال ويشوفون الرسائل، بدون حساب، وللقراءة بس.\n"
+                            "واللي يبي إشعار يرن: يثبت تطبيق ntfy، ويضغط +، ويكتب:\n"
                             f"{self.cfg['ntfy_topic']}",
                             [("تجربة", "test"), ("رابط جديد", "new"), ("إغلاق", None)],
-                            fields=[("الرابط", ntfy_url(self.cfg), False)])
+                            fields=[("الرابط", msgs_link(self.cfg), False)])
             if v == "test":
                 ok, err = ntfy_send_sync(self.cfg, "⏱ وقتي: رسالة تجربة. إذا شفتها، الإشعارات شغالة ✅")
                 self.info("تجربة", "انرسلت ✅ افتح الرابط وشوفها." if ok else f"ما انرسلت ❌\n{err}")
