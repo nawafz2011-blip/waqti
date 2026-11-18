@@ -14,7 +14,10 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import shutil
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -26,7 +29,7 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 5
+VERSION = 6
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 
@@ -65,6 +68,7 @@ DEFAULT_CONFIG = {
     "nobody_awake_minutes": 30,    # كم دقيقة يعطي خيار "ما أحد صاحي"
     "nobody_awake_per_day": 1,     # كم مرة باليوم لكل لاعب
     "day_start_hour": 4,           # اليوم الجديد يبدأ الساعة 4 الفجر
+    "ntfy_topic": "",             # اسم صفحة الإشعارات على ntfy.sh (ينصنع تلقائياً)
     "telegram_token": "",
     "telegram_chat_id": "",
     "autostart": False,
@@ -88,10 +92,33 @@ def save_json(path, data):
     os.replace(tmp, path)
 
 
+def new_topic():
+    return "waqti-" + secrets.token_hex(5)
+
+
+def ntfy_url(cfg):
+    return "https://ntfy.sh/" + cfg.get("ntfy_topic", "")
+
+
+def ntfy_send_sync(cfg, text):
+    """صفحة إشعارات مجانية: أي أحد يفتح الرابط يشوف الرسائل، واللي عنده تطبيق ntfy يجيه إشعار"""
+    if not cfg.get("ntfy_topic"):
+        return False, "ما فيه رابط"
+    try:
+        req = urllib.request.Request(ntfy_url(cfg), data=text.encode("utf-8"), method="POST",
+                                     headers={"Tags": "stopwatch", "Title": "Waqti"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status == 200, ""
+    except Exception as ex:
+        return False, str(ex)
+
+
 def load_config():
     cfg = load_json(CONFIG_PATH, DEFAULT_CONFIG)
     for k, v in DEFAULT_CONFIG.items():
         cfg.setdefault(k, copy.deepcopy(v))
+    if not cfg.get("ntfy_topic"):
+        cfg["ntfy_topic"] = new_topic()
     save_json(CONFIG_PATH, cfg)
     return cfg
 
@@ -176,6 +203,7 @@ def notify_all(cfg, text):
     cfg = copy.deepcopy(cfg)
 
     def run():
+        ntfy_send_sync(cfg, text)
         telegram_send_sync(cfg, text)
     threading.Thread(target=run, daemon=True).start()
 
@@ -262,6 +290,11 @@ class App:
             self.state["active"] = None
             self.save_state()
         self.log("app_start", "تشغّل البرنامج")
+        if IS_WIN and self.cfg.get("autostart"):
+            try:
+                set_autostart(True)   # نتأكد إن التشغيل التلقائي يأشر على المكان الصحيح
+            except Exception:
+                pass
 
         self.setup_lock_window()
         self.setup_timer_window()
@@ -306,10 +339,16 @@ class App:
             tmp = path + ".new"
             with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 f.write(code)
+            try:
+                os.chmod(path, stat.S_IWRITE | stat.S_IREAD)  # لو الملف للقراءة بس
+            except Exception:
+                pass
             os.replace(tmp, path)
         except Exception as ex:
             self.update_ready = None
-            self.log("update_fail", f"فشل التحديث: {ex}")
+            if getattr(self, "update_failed_ver", None) != ver:   # نسجل الفشل مرة وحدة بس
+                self.update_failed_ver = ver
+                self.log("update_fail", f"فشل التحديث: {ex}")
             return
         self.state["resume"] = {"name": self.active, "grace_left": self.grace_left,
                                 "warned": self.warned, "at": time.time()}
@@ -478,6 +517,8 @@ class App:
                  fg=MUTED).pack(pady=(30, 6))
         self.recent_lbl = tk.Label(lf, text="", font=(FONT, 12), bg=BG, fg=MUTED, justify="right")
         self.recent_lbl.pack()
+        self.link_lbl = tk.Label(lf, text="", font=(FONT, 11), bg=BG, fg=MUTED)
+        self.link_lbl.pack(pady=(18, 0))
 
     def refresh_lock(self):
         for w in self.players_frame.winfo_children():
@@ -492,8 +533,17 @@ class App:
             b = btn(self.players_frame, txt, lambda n=p["name"]: self.choose_player(n),
                     bg=color, size=16, width=12)
             b.grid(row=i // cols, column=cols - 1 - (i % cols), padx=10, pady=10)
-        lines = [f"{e['text']}   {entry_time(e)}" for e in read_log(7) if e.get("kind") != "app_start"][:6]
+        hide = ("app_start", "update_fail", "updated")
+        lines = []
+        for e in read_log(30):
+            if e.get("kind") in hide:
+                continue
+            txt = e["text"] if len(e["text"]) <= 80 else e["text"][:78] + "…"
+            lines.append(f"{txt}   {entry_time(e)}")
+            if len(lines) == 6:
+                break
         self.recent_lbl.configure(text="\n".join(lines) or "ما فيه أحداث")
+        self.link_lbl.configure(text="الرسائل على الجوال:  " + ntfy_url(self.cfg).replace("https://", ""))
 
     def show_lock(self):
         self.timer.withdraw()
@@ -988,6 +1038,7 @@ class App:
         bb.pack(fill="x", pady=(16, 0))
         btn(bb, "حفظ وإغلاق", save, bg=GOOD).pack(side="right", padx=4)
         btn(bb, "تجربة تيليجرام", test_tg, bg=BG).pack(side="right", padx=4)
+        btn(bb, "رابط الإشعارات", self.show_ntfy, bg=GOOD).pack(side="right", padx=4)
         btn(bb, "تغيير رمز الكبير", change_admin_pin, bg=BG).pack(side="right", padx=4)
         btn(bb, "إلغاء", close, bg=DIM).pack(side="left", padx=4)
 
@@ -996,6 +1047,27 @@ class App:
         s.geometry(f"+{(sw - s.winfo_reqwidth()) // 2}+{max(0, (sh - s.winfo_reqheight()) // 4)}")
         s.lift()
         s.focus_force()
+
+    def show_ntfy(self):
+        while True:
+            v, _ = self.ask("رابط الإشعارات",
+                            "أرسل هالرابط لإخوانك. أي واحد يفتحه من الجوال يشوف كل الرسائل، بدون حساب.\n"
+                            "واللي يبي إشعار يجيه على الجوال: يثبت تطبيق ntfy، ويضغط +، ويكتب اسم الصفحة:\n"
+                            f"{self.cfg['ntfy_topic']}",
+                            [("تجربة", "test"), ("رابط جديد", "new"), ("إغلاق", None)],
+                            fields=[("الرابط", ntfy_url(self.cfg), False)])
+            if v == "test":
+                ok, err = ntfy_send_sync(self.cfg, "⏱ وقتي: رسالة تجربة. إذا شفتها، الإشعارات شغالة ✅")
+                self.info("تجربة", "انرسلت ✅ افتح الرابط وشوفها." if ok else f"ما انرسلت ❌\n{err}")
+            elif v == "new":
+                ok, _ = self.ask("رابط جديد؟", "الرابط القديم يوقف، ولازم ترسل الجديد للكل.",
+                                 [("إيه، غيّره", "y"), ("لا", None)])
+                if ok:
+                    self.cfg["ntfy_topic"] = new_topic()
+                    self.save_cfg()
+                    self.log("settings", "الكبير غيّر رابط الإشعارات")
+            else:
+                return
 
     # ---------- exit
     def exit_app(self):
@@ -1017,7 +1089,43 @@ class App:
 _instance_lock = None
 
 
+INSTALL_PATH = os.path.join(DATA_DIR, "waqti.pyw")
+
+
+def version_of(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = re.search(r"^VERSION = (\d+)", f.read(), re.M)
+        return int(m.group(1)) if m else 0
+    except Exception:
+        return 0
+
+
+def install_self():
+    """البرنامج ينسخ نفسه لمكان ثابت (AppData) ويشتغل من هناك،
+    عشان يقدر يحدّث نفسه حتى لو شغلته من داخل ملف مضغوط أو من التنزيلات."""
+    if getattr(sys, "frozen", False):
+        return False
+    here = os.path.abspath(__file__)
+    if os.path.normcase(here) == os.path.normcase(INSTALL_PATH):
+        return False
+    try:
+        if version_of(INSTALL_PATH) <= VERSION:
+            if os.path.exists(INSTALL_PATH):
+                os.chmod(INSTALL_PATH, stat.S_IWRITE | stat.S_IREAD)
+            shutil.copyfile(here, INSTALL_PATH)
+        exe = sys.executable
+        if IS_WIN and exe.lower().endswith("python.exe"):
+            exe = exe[:-len("python.exe")] + "pythonw.exe"
+        subprocess.Popen([exe, INSTALL_PATH], creationflags=0x00000008 if IS_WIN else 0, close_fds=True)
+        return True
+    except Exception:
+        return False   # لو ما قدر، يشتغل من مكانه عادي
+
+
 def main():
+    if install_self():
+        return
     # نسخة وحدة بس من البرنامج
     global _instance_lock
     _instance_lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
