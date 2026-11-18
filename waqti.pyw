@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 18
-CHANGES = ("جديد في رابط المنظم: زر «طلّعه» يطلّع اللاعب من الجهاز ويمنعه يدخل لين تضغط «اسمح له».\n"
-           "خذ رابط المنظم من جديد من الإعدادات (تغيّر).")
+VERSION = 19
+CHANGES = ("جديد: «نسيت الرمز» في نافذة رمز الكبير. يوصلك رمز استرجاع على جوالك (قناة المنظم\n"
+           "ورابط المنظم)، تكتبه في الكمبيوتر وتحط رمز جديد.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -844,15 +844,55 @@ class App:
         self.ask(title, msg, [("حسناً", "ok")])
 
     def check_admin(self, reason="اكتب رمز الكبير"):
-        v, vals = self.ask("رمز الكبير", reason, [("دخول", True), ("إلغاء", None)],
+        v, vals = self.ask("رمز الكبير", reason, [("دخول", True), ("نسيت الرمز", "forgot"), ("إلغاء", None)],
                            fields=[("الرمز", "", True)])
         if not v:
             return False
+        if v == "forgot":
+            return self.forgot_pin()
         if hash_pin(vals[0]) == self.cfg["admin_pin"]:
             return True
         self.log("wrong_admin_pin", "⚠️ أحد حاول يدخل برمز الكبير وكان الرمز غلط", self.active, admin=True)
         self.info("خطأ", "الرمز غلط. وانكتبت المحاولة في السجل.")
         return False
+
+    def forgot_pin(self):
+        """رمز استرجاع يوصل للمنظم بس (قناة المنظم + رابط المنظم)"""
+        code = "".join(secrets.choice("0123456789") for _ in range(6))
+        expires = time.time() + 600
+        ntfy_admin_send(self.cfg, "وقتي: رمز استرجاع",
+                        f"🔑 رمز الاسترجاع: {code}\nصالح 10 دقايق. إذا ما طلبته أنت، أحد يحاول يغير رمزك. لا تعطيه أحد.")
+        self.log("pin_recover", "🔑 أحد طلب رمز استرجاع لرمز الكبير", self.active)
+        for tries in range(3):
+            v, vals = self.ask("نسيت الرمز",
+                               "انرسل رمز استرجاع (6 أرقام) لجوال المنظم: قناة المنظم في ntfy أو رابط المنظم.\n"
+                               f"اكتبه هنا. باقي {3 - tries} محاولات.",
+                               [("تأكيد", True), ("إلغاء", None)], fields=[("رمز الاسترجاع", "", False)])
+            if not v:
+                return False
+            typed = vals[0].strip().translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+            if time.time() > expires:
+                self.info("انتهى", "رمز الاسترجاع انتهت صلاحيته. اطلب واحد جديد.")
+                return False
+            if secrets.compare_digest(typed, code):
+                break
+        else:
+            self.log("pin_recover_fail", "⚠️ أحد كتب رمز استرجاع غلط 3 مرات", self.active, admin=True)
+            self.info("غلط", "3 محاولات غلط. اطلب رمز استرجاع جديد.")
+            return False
+        while True:
+            v, vals = self.ask("رمز الكبير الجديد", "اكتب رمز جديد ما أحد يعرفه.", [("حفظ", True), ("إلغاء", None)],
+                               fields=[("الرمز الجديد", "", True), ("أعده مرة ثانية", "", True)])
+            if not v:
+                return False
+            if vals[0].strip() and vals[0] == vals[1]:
+                break
+            self.info("خطأ", "الرمزين مو نفس بعض، أو فاضي.")
+        self.cfg["admin_pin"] = hash_pin(vals[0])
+        self.save_cfg()
+        self.log("pin_changed", "🔑 الكبير غيّر رمزه عن طريق «نسيت الرمز»", admin=True)
+        self.info("تم ✅", "تغيّر رمز الكبير.")
+        return True
 
     # ---------- lock screen
     def setup_lock_window(self):
