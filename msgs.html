@@ -276,16 +276,18 @@
     function drawNow() {
       if (!lastStatus) return;
       nowS.hidden = false; nowl.innerHTML = "";
+      var age = Math.max(0, Date.now() / 1000 - lastStatus.ts);
       lastStatus.players.forEach(function (p) {
+        var left = p.state === "playing" ? Math.max(0, p.rem - age) : p.rem;
         var r = document.createElement("div"); r.className = "nr";
         var n = document.createElement("span"); n.className = "n"; n.textContent = p.name;
         var c = document.createElement("span"); c.className = "chip2 c-" + p.state;
-        c.textContent = { playing: "🟢 يلعب · باقي " + hmLeft(p.rem), open: "🟠 وقت مفتوح", blocked: "🚫 ممنوع",
-                          done: "خلص وقته", idle: "باقي " + hmLeft(p.rem) }[p.state] || "";
+        c.textContent = { playing: "🟢 يلعب · باقي " + hmLeft(left), open: "🟠 وقت مفتوح", blocked: "🚫 ممنوع",
+                          done: "خلص وقته", idle: "باقي " + hmLeft(left) }[p.state] || "";
         r.appendChild(n); r.appendChild(c); nowl.appendChild(r);
       });
       var ago = Math.max(0, Math.round((Date.now() / 1000 - lastStatus.ts) / 60));
-      nowt.textContent = ago < 2 ? "تحدّث الحين" : ("آخر تحديث قبل " + ago + " دقيقة" + (ago > 15 ? " · الكمبيوتر يمكن مطفي" : ""));
+      nowt.textContent = ago < 2 ? "تحدّث الحين" : ("آخر تحديث قبل " + ago + " دقيقة" + (ago > 20 ? " · الكمبيوتر يمكن مطفي" : ""));
     }
     function gotStatus(txt) {
       txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") { var d = JSON.parse(m.message);
@@ -295,7 +297,7 @@
     var stt = "https://ntfy.sh/" + encodeURIComponent(admin + "-status");
     fetch(stt + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(gotStatus).catch(function () {});
     try { var ses = new EventSource(stt + "/sse"); ses.onmessage = function (e) { gotStatus(e.data); }; } catch (e) {}
-    setInterval(drawNow, 30000);
+    setInterval(drawNow, 15000);
     nowS.hidden = false;
     nowl.innerHTML = '<div class="nowt">ننتظر أول تحديث من الكمبيوتر… (يوصل خلال دقيقة لو البرنامج شغال ونسخته 27 أو أكثر)</div>';
     var rkey = "waqti-roster-" + admin, saved = [];

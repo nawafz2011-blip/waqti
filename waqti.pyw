@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 29
-CHANGES = "رجعنا البرنامج مثل ما كان في النسخة 27 بالضبط."
+VERSION = 30
+CHANGES = ("تصليح «🎮 الحين» وأوامر الجوال: البرنامج صار يكلم ntfy أقل بكثير (كان يتعدى الحد اليومي\n"
+           "فيوقفه ntfy). الأوامر توصل من اتصال واحد مفتوح، والحالة تنرسل لما يصير شي.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -594,6 +595,7 @@ class App:
         self.root.after(1000, self.tick)
         self.root.after(500, self.keep_on_top)
         self.root.after(5000, self.check_update)
+        self.start_stream()
         seen = self.cfg.setdefault("seen_versions", {})
         if seen.get(USER) != VERSION:
             first = USER not in seen
@@ -1247,6 +1249,47 @@ class App:
         self.info("انرسلت ✅", "وصلت رسالة للمنظم. أول ما يوافق من جواله، يصير الريست بروحه.")
         self.refresh_lock()
 
+    def start_stream(self):
+        """اتصال واحد مفتوح مع ntfy: أوامر الجوال وموافقات الريست توصل منه على طول
+        (بدل ما نسأل كل كم ثانية ونتعدى حد ntfy المجاني)"""
+        def run():
+            since = int(time.time()) - 60
+            while True:
+                try:
+                    url = f"https://ntfy.sh/{self.cfg['admin_topic']}-ok/json?since={since}"
+                    with urllib.request.urlopen(url, timeout=120) as r:
+                        for raw in r:
+                            try:
+                                ev = json.loads(raw.decode("utf-8", "ignore"))
+                            except Exception:
+                                continue
+                            if ev.get("time"):
+                                since = max(since, int(ev["time"]))
+                            if ev.get("event") == "message":
+                                self.handle_ok_message(ev.get("message", ""))
+                except Exception:
+                    pass
+                time.sleep(30)
+        threading.Thread(target=run, daemon=True).start()
+
+    def handle_ok_message(self, m):
+        try:
+            d = json.loads(m)
+        except Exception:
+            return
+        if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin") and d.get("id"):
+            self.cmd_queue.append(d)
+            return
+        req = getattr(self, "pending_req", None)
+        if not req or d.get("r") != req.get("r"):
+            return
+        good = hashlib.sha256((self.cfg["admin_pin"] + req["n"]).encode()).hexdigest()
+        ok = d.get("p") == good
+        ntfy_admin_send(self.cfg, "وقتي", "✅ تم الريست" if ok else "❌ الرمز غلط",
+                        topic=self.cfg["admin_topic"] + "-res-" + req["r"])
+        if ok:
+            self.reset_approved = (req.get("kind", "time"), req["who"])
+
     def poll_reset(self):
         req = getattr(self, "pending_req", None)
         if not req or getattr(self, "_polling", False):
@@ -1282,8 +1325,16 @@ class App:
         if self.active:
             playing.add(self.active)
         last = getattr(self, "_status_sent", 0)
-        gap = 60 if playing else 600
-        if not force and time.time() - last < gap:
+        if not force and time.time() - last < 900:
+            return
+        if force and time.time() - last < 5:      # أحداث ورا بعض: نرسل وحدة بعد 6 ثواني
+            if not getattr(self, "_status_pending", False):
+                self._status_pending = True
+
+                def later():
+                    self._status_pending = False
+                    self.publish_status(force=True)
+                self.root.after(6000, later)
             return
         self._status_sent = time.time()
         rows = []
@@ -1346,6 +1397,7 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def apply_cmd(self, d):
+        self.root.after(2000, lambda: self.publish_status(force=True))
         cid, cmd, who, ts = str(d.get("id")), d.get("cmd"), str(d.get("who", "")), str(d.get("ts", ""))
         if cid in getattr(self, "_seen_cmds", set()):
             return
@@ -1427,6 +1479,7 @@ class App:
             self.refresh_lock()
 
     def do_reset(self, kind, who, how):
+        self.root.after(1500, lambda: self.publish_status(force=True))
         if kind == "round":
             def op(st):
                 self._new_round(st)
@@ -1445,6 +1498,7 @@ class App:
             self.do_reset_time(who, how)
 
     def do_reset_time(self, who, how):
+        self.root.after(1500, lambda: self.publish_status(force=True))
         def op(st):
             for k in ("used", "bonus", "nobody"):
                 st.setdefault(k, {}).pop(who, None)
@@ -1507,6 +1561,7 @@ class App:
         if name and self.remaining(name) <= 0 and not self.is_open(name):
             self.mark_finished(name)
         self.check_round_done()
+        self.publish_status(force=True)
         self.show_lock()
 
     def on_logoff(self):
@@ -1565,6 +1620,7 @@ class App:
             self.start_session(name)
 
     def open_time(self, name):
+        self.root.after(1500, lambda: self.publish_status(force=True))
         def op(st):
             st.setdefault("open", {})[name] = time.time()
             st.setdefault("nobody", {})[name] = st["nobody"].get(name, 0) + 1
@@ -1576,6 +1632,7 @@ class App:
             self.update_timer_ui()
 
     def grant(self, name, minutes, by):
+        self.root.after(1500, lambda: self.publish_status(force=True))
         self.state["bonus"][name] = self.state["bonus"].get(name, 0) + minutes * 60
         if by == "nobody":
             self.state["nobody"][name] = self.state["nobody"].get(name, 0) + 1
@@ -1684,10 +1741,8 @@ class App:
             for cmd in self.cmd_queue[:]:
                 self.cmd_queue.remove(cmd)
                 self.apply_cmd(cmd)
-            if int(time.time()) % 5 == 0:
-                self.poll_cmds()
-            if getattr(self, "pending_req", None) and int(time.time()) % 3 == 0:
-                self.poll_reset()
+            if getattr(self, "pending_req", None) and time.time() - self.pending_req["at"] > 3600:
+                self.pending_req = None
             if self.free:
                 self.save_tick += 1
                 if self.save_tick >= 10:      # حساب الكبير: نتزامن ونرسل الحالة للمنظم بس
@@ -1719,6 +1774,7 @@ class App:
                     if rem <= 0:
                         g = int(self.cfg["grace_minutes"])
                         self.grace_left = g * 60
+                        self.publish_status(force=True)
                         self.log("timeout", f"⏰ خلص وقت {name}. عنده {g} دقايق مهلة وبعدها ينقفل الجهاز",
                                  name, notify=True)
                         self.toast("خلص وقتك!", f"عندك {g} دقايق وبعدها ينقفل الجهاز.\n"
