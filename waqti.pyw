@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 32
-CHANGES = ("جديد: زر «إخفاء» في مربع الوقت. ترجّعه بزر F1 (حتى وأنت داخل اللعبة).\n"
-           "وإذا خلص وقتك وبدأت المهلة، يرجع يطلع بروحه.")
+VERSION = 33
+CHANGES = "شلنا قفل أوامر الجوال (15 دقيقة) بعد الرموز الغلط. الرمز الغلط يقول «غلط» بس."
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1456,30 +1455,12 @@ class App:
             fresh = False
         good = hashlib.sha256((self.cfg["admin_pin"] + f"{cmd}|{who}|{ts}").encode()).hexdigest()
         res_topic = self.cfg["admin_topic"] + "-res-" + cid
-        if float(self.state.get("remote_lock") or 0) > time.time():
-            if cid not in (self.state.get("cmds_done") or []):
-                self.state_op(lambda st: st.setdefault("cmds_done", []).append(cid))
-                ntfy_admin_send(self.cfg, "وقتي", "🔒 أوامر الجوال مقفلة 15 دقيقة بسبب رموز غلط", topic=res_topic)
-            return
         valid_target = (cmd == "reset_round" or (cmd == "set_pin" and re.fullmatch(r"[0-9a-f]{64}", who))
                         or self.player(who))
         if not fresh or d.get("p") != good or not valid_target:
             if cid not in (self.state.get("cmds_done") or []):
-                wrong = fresh and d.get("p") != good
-                info = {}
-
-                def op_bad(st):
-                    st.setdefault("cmds_done", []).append(cid)
-                    if wrong:
-                        st["remote_fails"] = int(st.get("remote_fails", 0)) + 1
-                        if st["remote_fails"] >= 5:
-                            st["remote_fails"] = 0
-                            st["remote_lock"] = time.time() + 900
-                            info["locked"] = True
-                self.state_op(op_bad)
+                self.state_op(lambda st: st.setdefault("cmds_done", []).append(cid))
                 ntfy_admin_send(self.cfg, "وقتي", "❌ الرمز غلط أو الطلب قديم", topic=res_topic)
-                if info.get("locked"):
-                    self.log("remote_locked", "🔒 5 رموز غلط من الجوال: انقفلت أوامر الجوال 15 دقيقة", admin=True)
             return
         if cmd == "set_pin":               # كل نسخة شغالة تحدّث الرمز عندها (عشان ما ترجعه القديم)
             self.cfg["admin_pin"] = who
@@ -1491,7 +1472,6 @@ class App:
             first["yes"] = cid not in done
             done.append(cid)
             del done[:-50]
-            st["remote_fails"] = 0
             b = st.setdefault("blocked", [])
             if cmd in ("reset_time", "reset_round", "set_pin"):
                 return
