@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 8
-CHANGES = "رقم النسخة صار يطلع تحت شاشة القفل، وبعد كل تحديث تطلع هالرسالة فيها وش تغيّر."
+VERSION = 9
+CHANGES = "جديد: الإعدادات ← «ربط الحسابات». تختار لكل حساب ويندوز صاحبه من قائمة (أو «بدون حد»)."
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 
@@ -325,6 +325,38 @@ def set_autostart(on):
                 pass
     finally:
         winreg.CloseKey(key)
+
+
+def windows_accounts():
+    """أسماء حسابات ويندوز اللي في الجهاز"""
+    names = []
+    if IS_WIN:
+        try:
+            import winreg
+            base = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base)
+            i = 0
+            while True:
+                try:
+                    sid = winreg.EnumKey(k, i)
+                except OSError:
+                    break
+                i += 1
+                if not sid.startswith("S-1-5-21-"):
+                    continue
+                try:
+                    sk = winreg.OpenKey(k, sid)
+                    path = winreg.QueryValueEx(sk, "ProfileImagePath")[0]
+                    n = os.path.basename(os.path.expandvars(path)).strip().lower()
+                    if n and not n.startswith("defaultuser"):
+                        names.append(n)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+    if USER not in names:
+        names.insert(0, USER)
+    return sorted(set(names), key=lambda n: (n != USER, n))
 
 
 def python_cmd():
@@ -1175,7 +1207,84 @@ class App:
                            ("تعديل", lambda: (lambda p: p and edit_player(p))(selected())),
                            ("حذف", del_player), ("زيادة/نقص وقت", add_time), ("تصفير اليوم", reset_day)):
             btn(pbtns, label, cmd, bg=BG, size=10, width=12).pack(pady=2)
+        btn(pbtns, "ربط الحسابات", lambda: link_accounts(), bg=GOOD, size=10, width=12).pack(pady=(8, 2))
         refresh_lb()
+
+        def link_accounts():
+            w = tk.Toplevel(self.root)
+            w.title("ربط الحسابات")
+            w.configure(bg=CARD, padx=22, pady=18)
+            w.attributes("-topmost", True)
+            self.dialogs.append(w)
+            tk.Label(w, text="ربط الحسابات", font=(FONT, 16, "bold"), bg=CARD, fg=FG).pack(anchor="e")
+            tk.Label(w, text="اختر لكل حساب ويندوز صاحبه. إذا دخل حسابه، يبدأ وقته على طول.",
+                     font=(FONT, 11), bg=CARD, fg=MUTED).pack(anchor="e", pady=(2, 12))
+            NONE, FREE = "—  (يختار اسمه بنفسه)", "بدون حد للوقت"
+            options = [NONE, FREE] + [p["name"] for p in self.cfg["players"]]
+            free = [a.strip().lower() for a in str(self.cfg.get("free_accounts", "")).replace("،", ",").split(",") if a.strip()]
+            grid = tk.Frame(w, bg=CARD)
+            grid.pack(fill="x")
+            vars_ = {}
+            for i, acc in enumerate(windows_accounts()):
+                cur = NONE
+                if acc in free:
+                    cur = FREE
+                for p in self.cfg["players"]:
+                    if (p.get("windows_user") or "").lower() == acc:
+                        cur = p["name"]
+                label = acc + ("   (أنت)" if acc == USER else "")
+                tk.Label(grid, text=label, font=(FONT, 12, "bold"), bg=CARD, fg=FG).grid(row=i, column=1, sticky="e", pady=4)
+                v = tk.StringVar(value=cur)
+                om = tk.OptionMenu(grid, v, *options)
+                om.configure(font=(FONT, 11), bg=BG, fg=FG, activebackground=ACCENT, activeforeground=FG,
+                             highlightthickness=0, relief="flat", width=22)
+                om["menu"].configure(font=(FONT, 11))
+                om.grid(row=i, column=0, sticky="w", padx=(0, 14), pady=4)
+                vars_[acc] = v
+
+            def close_w():
+                if w in self.dialogs:
+                    self.dialogs.remove(w)
+                w.destroy()
+
+            def save_w():
+                chosen = {}
+                for acc, v in vars_.items():
+                    val = v.get()
+                    if val not in (NONE, FREE):
+                        if val in chosen:
+                            self.info("خطأ", f"{val} مربوط بحسابين. كل لاعب له حساب واحد بس.")
+                            return
+                        chosen[val] = acc
+                new_free = [acc for acc, v in vars_.items() if v.get() == FREE]
+                listed = set(vars_)
+                for p in self.cfg["players"]:
+                    old = (p.get("windows_user") or "").lower()
+                    if p["name"] in chosen:
+                        p["windows_user"] = chosen[p["name"]]
+                    elif old in listed:
+                        p["windows_user"] = ""
+                keep_free = [a for a in free if a not in listed]
+                self.cfg["free_accounts"] = ", ".join(keep_free + new_free)
+                self.save_cfg()
+                ents["free_accounts"].delete(0, "end")
+                ents["free_accounts"].insert(0, self.cfg["free_accounts"])
+                desc = "، ".join(f"{acc} = {n}" for n, acc in chosen.items()) or "ما فيه"
+                self.log("settings", f"الكبير ربط الحسابات: {desc}" + (f"، وبدون حد: {', '.join(new_free)}" if new_free else ""),
+                         notify=True)
+                refresh_lb()
+                close_w()
+
+            w.protocol("WM_DELETE_WINDOW", close_w)
+            row = tk.Frame(w, bg=CARD)
+            row.pack(fill="x", pady=(16, 0))
+            btn(row, "حفظ", save_w, bg=GOOD).pack(side="right", padx=4)
+            btn(row, "إلغاء", close_w, bg=DIM).pack(side="left", padx=4)
+            w.update_idletasks()
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            w.geometry(f"+{(sw - w.winfo_reqwidth()) // 2}+{(sh - w.winfo_reqheight()) // 3}")
+            w.lift()
+            w.focus_force()
 
         # general
         tk.Label(s, text="عام", font=(FONT, 13, "bold"), bg=CARD, fg=MUTED).pack(anchor="e", pady=(16, 4))
