@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 34
-CHANGES = ("الدور الجديد ما يبدأ بروحه: لما يخلص وقت الكل، الوقت يرجع لما يبدأ اللي لعب أول.\n"
-           "يعني آخر واحد ما يقدر يرجع يلعب على طول.")
+VERSION = 35
+CHANGES = ("لما يخلص وقت الكل، أي واحد يقدر يدخل ويطلب «وقت إضافي» أو «ما أحد صاحي».\n"
+           "والوقت الكامل يرجع للكل لما يبدأ اللي لعب أول.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1121,8 +1121,15 @@ class App:
             self.info("ممنوع", f"{name}، المنظم طلّعك ومنعك. ما تقدر تدخل لين يسمح لك.")
             return
         self.maybe_open_round(name)
-        if not self.can_play(name) and self.round_complete():
-            self.info("انتظر", f"{name}، خلص وقت الكل.\nالوقت يرجع للكل لما يبدأ {self.round_opener()} يلعب.")
+        if self.round_complete() and name != self.round_opener() and \
+                self.remaining(name) <= 0 and not self.is_open(name):
+            v, _ = self.ask("خلص وقت الكل", f"{name}، خلص وقت الكل.\n"
+                                            f"الوقت الكامل يرجع للكل لما يبدأ {self.round_opener()} يلعب.\n\n"
+                                            "تبي وقت إضافي؟",
+                            [("وقت إضافي", "extra"), ("إلغاء", None)])
+            if v:
+                self.extension_flow(name, from_lock=True)
+                self.refresh_lock()
             return
         if not self.can_play(name):
             left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
@@ -1165,7 +1172,7 @@ class App:
         if name in (self.state.get("blocked") or []):
             return False
         if self.round_complete():
-            return name == self.round_opener()
+            return name == self.round_opener() or self.remaining(name) > 0 or self.is_open(name)
         return name not in self.state.get("round", [])
 
     def maybe_open_round(self, name):
