@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 20
-CHANGES = ("تصليح «ريست الوقت»: صار يسألك دايماً لمين الريست، ويشتغل حتى لو الشخص في المهلة\n"
-           "أو يلعب في حساب ثاني.")
+VERSION = 21
+CHANGES = ("اللاعب صار يقدر ينربط بأكثر من حساب (مثلاً يوسف في حسابك وحساب أخوك).\n"
+           "وحسابك (بدون حد) إذا فيه لاعبين: تطلع أسماءهم + زر «أنا الكبير».")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -443,6 +443,10 @@ def set_autostart(on):
         winreg.CloseKey(key)
 
 
+def p_accounts(p):
+    return [a.strip().lower() for a in str(p.get("windows_user") or "").replace("،", ",").split(",") if a.strip()]
+
+
 def windows_accounts():
     """أسماء حسابات ويندوز اللي في الجهاز"""
     names = []
@@ -549,7 +553,7 @@ class App:
         self.setup_lock_window()
         self.setup_timer_window()
         me = self.linked_player()
-        if self.is_free_account():
+        if self.is_free_account() and not self.linked_players():
             self.show_free()
         else:
             self.show_lock()
@@ -580,12 +584,12 @@ class App:
     # ---------- windows accounts
     def linked_players(self):
         return [p["name"] for p in self.cfg["players"]
-                if (p.get("windows_user") or "").strip().lower() == USER]
+                if USER in p_accounts(p)]
 
     def linked_player(self):
         """صاحب الحساب إذا كان شخص واحد بس (الحساب المشترك ما يبدأ تلقائياً)"""
         lp = self.linked_players()
-        return lp[0] if len(lp) == 1 else None
+        return lp[0] if len(lp) == 1 and not self.is_free_account() else None
 
     def is_free_account(self):
         free = [a.strip().lower() for a in str(self.cfg.get("free_accounts", "")).replace("،", ",").split(",")]
@@ -609,11 +613,33 @@ class App:
             btn(row, "السجل", self.open_log, bg=CARD, size=10).pack(side="right", padx=4)
             btn(row, "الإعدادات", self.open_settings, bg=CARD, size=10).pack(side="right", padx=4)
             btn(row, "إغلاق البرنامج", self.exit_app, bg=CARD, size=10).pack(side="right", padx=4)
+            self.lock_back_btn = btn(row, "🔒 شاشة القفل", self.back_to_lock, bg=CARD, size=10)
+        if self.linked_players():
+            self.lock_back_btn.pack(side="right", padx=4)
+        else:
+            self.lock_back_btn.pack_forget()
         self.free_frame.pack(fill="both", expand=True)
         r.geometry("")
         r.deiconify()
         r.protocol("WM_DELETE_WINDOW", r.iconify)
         r.iconify()
+
+    def elder_enter(self):
+        if self.check_admin("حساب الكبير: اكتب رمزك وتستخدم الجهاز بدون حد"):
+            self.log("elder", "👑 الكبير دخل حسابه (بدون حد)")
+            self.show_free()
+
+    def back_to_lock(self):
+        """من وضع الكبير ترجع لشاشة القفل عشان لاعب يختار اسمه"""
+        self.free = False
+        r = self.root
+        self.free_frame.pack_forget()
+        r.deiconify()
+        r.overrideredirect(True)
+        r.attributes("-topmost", True)
+        r.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.lock_frame.place(relx=0.5, rely=0.45, anchor="center")
+        self.show_lock()
 
     def logoff(self):
         v, _ = self.ask("تسجيل خروج", "تطلع من حساب ويندوز؟ (احفظ شغلك أول)", [("إيه، اطلع", "y"), ("لا", None)])
@@ -925,6 +951,7 @@ class App:
         btn(bottom, "إغلاق البرنامج", self.exit_app, bg=CARD).pack(side="right", padx=6)
         if IS_WIN:
             btn(bottom, "تسجيل خروج من ويندوز", self.logoff, bg=CARD).pack(side="right", padx=6)
+        self.elder_btn = btn(bottom, "👑 أنا الكبير", self.elder_enter, bg=CARD)
 
         tk.Label(lf, text="آخر الأحداث (الكل يشوفها)", font=(FONT, 13, "bold"), bg=BG,
                  fg=MUTED).pack(pady=(30, 6))
@@ -938,7 +965,12 @@ class App:
             w.destroy()
         cols = 4
         mine = self.linked_players()
-        shown = [p for p in self.cfg["players"] if p["name"] in mine] if len(mine) > 1 else self.cfg["players"]
+        if self.is_free_account():
+            self.elder_btn.pack(side="right", padx=6)
+        else:
+            self.elder_btn.pack_forget()
+        shown = [p for p in self.cfg["players"] if p["name"] in mine] \
+            if (len(mine) > 1 or (mine and self.is_free_account())) else self.cfg["players"]
         for i, p in enumerate(shown):
             rem = self.remaining(p["name"])
             if p["name"] in (self.state.get("blocked") or []):
@@ -1787,13 +1819,14 @@ class App:
             names = [p["name"] for p in self.cfg["players"]]
             for i, acc in enumerate(windows_accounts()):
                 cur = [FREE] if acc in free else []
-                cur += [p["name"] for p in self.cfg["players"] if (p.get("windows_user") or "").lower() == acc]
+                cur += [p["name"] for p in self.cfg["players"] if acc in p_accounts(p)]
                 label = acc + ("   (أنت)" if acc == USER else "")
                 tk.Label(grid, text=label, font=(FONT, 12, "bold"), bg=CARD, fg=FG).grid(row=i, column=1, sticky="e", pady=4)
                 b = btn(grid, "، ".join(cur) or NONE, None, bg=BG, size=11, width=26)
 
                 def pick(acc=acc, b=b):
-                    sel = self.pick_many(f"حساب {acc}", "مين يستخدم هالحساب؟ تقدر تختار أكثر من واحد.",
+                    sel = self.pick_many(f"حساب {acc}", "مين يستخدم هالحساب؟ تقدر تختار أكثر من واحد.\n"
+                                         "«بدون حد» = حسابك أنت، وتقدر تختار معه لاعبين يستخدمونه.",
                                          names, FREE, vars_[acc])
                     if sel is not None:
                         vars_[acc] = sel
@@ -1811,26 +1844,19 @@ class App:
                 chosen = {}
                 for acc, sel in vars_.items():
                     for val in sel:
-                        if val == FREE:
-                            continue
-                        if val in chosen:
-                            self.info("خطأ", f"{val} مربوط بحسابين. كل لاعب له حساب واحد بس.")
-                            return
-                        chosen[val] = acc
+                        if val != FREE:
+                            chosen.setdefault(val, []).append(acc)
                 new_free = [acc for acc, sel in vars_.items() if FREE in sel]
                 listed = set(vars_)
                 for p in self.cfg["players"]:
-                    old = (p.get("windows_user") or "").lower()
-                    if p["name"] in chosen:
-                        p["windows_user"] = chosen[p["name"]]
-                    elif old in listed:
-                        p["windows_user"] = ""
+                    keep = [a for a in p_accounts(p) if a not in listed]
+                    p["windows_user"] = ",".join(keep + chosen.get(p["name"], []))
                 keep_free = [a for a in free if a not in listed]
                 self.cfg["free_accounts"] = ", ".join(keep_free + new_free)
                 self.save_cfg()
                 ents["free_accounts"].delete(0, "end")
                 ents["free_accounts"].insert(0, self.cfg["free_accounts"])
-                desc = "، ".join(f"{acc} = {n}" for n, acc in chosen.items()) or "ما فيه"
+                desc = "، ".join(f"{n} = {' + '.join(accs)}" for n, accs in chosen.items()) or "ما فيه"
                 self.log("settings", f"الكبير ربط الحسابات: {desc}" + (f"، وبدون حد: {', '.join(new_free)}" if new_free else ""),
                          notify=True)
                 refresh_lb()
@@ -1922,7 +1948,7 @@ class App:
                     self.info("خطأ", f"ما قدرت أضبط التشغيل التلقائي:\n{ex}")
             self.save_cfg()
             visible = [k for k in changed if not k.startswith("telegram")]
-            if self.is_free_account() and not self.free:
+            if self.is_free_account() and not self.free and not self.linked_players():
                 self.info("حساب بدون حد", "هذا الحساب صار بدون حد. البرنامج بيصير نافذة صغيرة في شريط المهام.")
                 self.root.after(300, self.show_free)
             if visible:
@@ -1967,7 +1993,7 @@ class App:
         def done(ok):
             if ok:
                 sel = [n for n, v in vs.items() if v.get()]
-                res["v"] = [free_label] if free_label in sel else sel
+                res["v"] = ([free_label] if free_label in sel else []) + [n for n in sel if n != free_label]
             if d in self.dialogs:
                 self.dialogs.remove(d)
             d.destroy()
