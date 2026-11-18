@@ -31,7 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 7
+VERSION = 8
+CHANGES = "رقم النسخة صار يطلع تحت شاشة القفل، وبعد كل تحديث تطلع هالرسالة فيها وش تغيّر."
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 
@@ -406,7 +407,7 @@ class App:
         if self.free:
             if resume:
                 self.log("updated", f"تحدّث البرنامج للنسخة {VERSION}")
-        elif resume and self.state.get("active") == resume.get("name"):
+        elif resume and resume.get("name") and self.state.get("active") == resume.get("name"):
             self.continue_session(resume)
         else:
             if resume:
@@ -417,6 +418,13 @@ class App:
         self.root.after(1000, self.tick)
         self.root.after(500, self.keep_on_top)
         self.root.after(5000, self.check_update)
+        seen = self.cfg.setdefault("seen_versions", {})
+        if seen.get(USER) != VERSION:
+            first = USER not in seen
+            seen[USER] = VERSION
+            self.save_cfg()
+            if not first or resume:     # أول تشغيل للبرنامج ما نحتاج رسالة تحديث
+                self.root.after(1500, lambda: self.info(f"تحدّث البرنامج ✅  النسخة {VERSION}", CHANGES))
 
     # ---------- windows accounts
     def linked_player(self):
@@ -440,7 +448,7 @@ class App:
         if not hasattr(self, "free_frame"):
             self.free_frame = tk.Frame(r, bg=BG, padx=20, pady=16)
             tk.Label(self.free_frame, text="⏱ وقتي", font=(FONT, 18, "bold"), bg=BG, fg=FG).pack()
-            tk.Label(self.free_frame, text=f"حساب {USER}: بدون حد للوقت", font=(FONT, 11), bg=BG,
+            tk.Label(self.free_frame, text=f"حساب {USER}: بدون حد للوقت  ·  النسخة {VERSION}", font=(FONT, 11), bg=BG,
                      fg=MUTED).pack(pady=(2, 12))
             row = tk.Frame(self.free_frame, bg=BG)
             row.pack()
@@ -740,7 +748,8 @@ class App:
             if len(lines) == 6:
                 break
         self.recent_lbl.configure(text="\n".join(lines) or "ما فيه أحداث")
-        self.link_lbl.configure(text="الرسائل على الجوال:  " + ntfy_url(self.cfg).replace("https://", ""))
+        self.link_lbl.configure(text=f"النسخة {VERSION}     ·     الرسائل على الجوال:  "
+                                     + ntfy_url(self.cfg).replace("https://", ""))
 
     def show_lock(self):
         if self.free:
@@ -1054,7 +1063,7 @@ class App:
 
         s.protocol("WM_DELETE_WINDOW", close)
         tk.Label(s, text="الإعدادات", font=(FONT, 18, "bold"), bg=CARD, fg=FG).pack(anchor="e")
-        tk.Label(s, text=f"أنت الحين في حساب ويندوز: {USER}", font=(FONT, 11), bg=CARD, fg=MUTED).pack(anchor="e")
+        tk.Label(s, text=f"أنت الحين في حساب ويندوز: {USER}   ·   النسخة {VERSION}", font=(FONT, 11), bg=CARD, fg=MUTED).pack(anchor="e")
 
         # players
         tk.Label(s, text="اللاعبين", font=(FONT, 13, "bold"), bg=CARD, fg=MUTED).pack(anchor="e", pady=(12, 4))
