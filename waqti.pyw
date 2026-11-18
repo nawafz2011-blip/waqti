@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 16
-CHANGES = ("جديد: «رابط المنظم» في الإعدادات (لك بس). تفتحه من جوالك وتشوف طلبات الريست\n"
-           "وتوافق عليها بزر، بدون تطبيق ntfy.")
+VERSION = 17
+CHANGES = ("«ربط الحسابات» صار يقبل أكثر من شخص في نفس الحساب.\n"
+           "إذا دخل حساب مشترك، تطلع أسماء أصحابه بس، وكل واحد يختار اسمه.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -576,11 +576,14 @@ class App:
                 self.root.after(1500, lambda: self.info(f"تحدّث البرنامج ✅  النسخة {VERSION}", CHANGES))
 
     # ---------- windows accounts
+    def linked_players(self):
+        return [p["name"] for p in self.cfg["players"]
+                if (p.get("windows_user") or "").strip().lower() == USER]
+
     def linked_player(self):
-        for p in self.cfg["players"]:
-            if (p.get("windows_user") or "").strip().lower() == USER:
-                return p["name"]
-        return None
+        """صاحب الحساب إذا كان شخص واحد بس (الحساب المشترك ما يبدأ تلقائياً)"""
+        lp = self.linked_players()
+        return lp[0] if len(lp) == 1 else None
 
     def is_free_account(self):
         free = [a.strip().lower() for a in str(self.cfg.get("free_accounts", "")).replace("،", ",").split(",")]
@@ -892,7 +895,9 @@ class App:
         for w in self.players_frame.winfo_children():
             w.destroy()
         cols = 4
-        for i, p in enumerate(self.cfg["players"]):
+        mine = self.linked_players()
+        shown = [p for p in self.cfg["players"] if p["name"] in mine] if len(mine) > 1 else self.cfg["players"]
+        for i, p in enumerate(shown):
             rem = self.remaining(p["name"])
             if self.is_open(p["name"]):
                 txt, color = f'{p["name"]}\nوقت مفتوح', WARN
@@ -1636,27 +1641,23 @@ class App:
             grid = tk.Frame(w, bg=CARD)
             grid.pack(fill="x")
             vars_ = {}
+            names = [p["name"] for p in self.cfg["players"]]
             for i, acc in enumerate(windows_accounts()):
-                cur = NONE
-                if acc in free:
-                    cur = FREE
-                for p in self.cfg["players"]:
-                    if (p.get("windows_user") or "").lower() == acc:
-                        cur = p["name"]
+                cur = [FREE] if acc in free else []
+                cur += [p["name"] for p in self.cfg["players"] if (p.get("windows_user") or "").lower() == acc]
                 label = acc + ("   (أنت)" if acc == USER else "")
                 tk.Label(grid, text=label, font=(FONT, 12, "bold"), bg=CARD, fg=FG).grid(row=i, column=1, sticky="e", pady=4)
-                v = tk.StringVar(value=cur)
-                b = btn(grid, cur, None, bg=BG, size=11, width=22)
+                b = btn(grid, "، ".join(cur) or NONE, None, bg=BG, size=11, width=26)
 
-                def pick(acc=acc, v=v, b=b):
-                    ch, _ = self.ask(f"حساب {acc}", "مين صاحب هالحساب؟",
-                                     [(o, o) for o in options[2:]] + [(FREE, FREE), ("بدون ربط", NONE)])
-                    if ch:
-                        v.set(ch)
-                        b.configure(text=ch)
+                def pick(acc=acc, b=b):
+                    sel = self.pick_many(f"حساب {acc}", "مين يستخدم هالحساب؟ تقدر تختار أكثر من واحد.",
+                                         names, FREE, vars_[acc])
+                    if sel is not None:
+                        vars_[acc] = sel
+                        b.configure(text="، ".join(sel) or NONE)
                 b.configure(command=pick)
                 b.grid(row=i, column=0, sticky="w", padx=(0, 14), pady=4)
-                vars_[acc] = v
+                vars_[acc] = cur
 
             def close_w():
                 if w in self.dialogs:
@@ -1665,14 +1666,15 @@ class App:
 
             def save_w():
                 chosen = {}
-                for acc, v in vars_.items():
-                    val = v.get()
-                    if val not in (NONE, FREE):
+                for acc, sel in vars_.items():
+                    for val in sel:
+                        if val == FREE:
+                            continue
                         if val in chosen:
                             self.info("خطأ", f"{val} مربوط بحسابين. كل لاعب له حساب واحد بس.")
                             return
                         chosen[val] = acc
-                new_free = [acc for acc, v in vars_.items() if v.get() == FREE]
+                new_free = [acc for acc, sel in vars_.items() if FREE in sel]
                 listed = set(vars_)
                 for p in self.cfg["players"]:
                     old = (p.get("windows_user") or "").lower()
@@ -1801,6 +1803,47 @@ class App:
         s.geometry(f"+{(sw - s.winfo_reqwidth()) // 2}+{max(0, (sh - s.winfo_reqheight()) // 4)}")
         s.lift()
         s.focus_force()
+
+    def pick_many(self, title, msg, names, free_label, current):
+        """نافذة اختيار أكثر من شخص (أو «بدون حد»)"""
+        d = tk.Toplevel(self.root)
+        d.title(title)
+        d.configure(bg=CARD, padx=24, pady=20)
+        d.attributes("-topmost", True)
+        self.dialogs.append(d)
+        tk.Label(d, text=title, font=(FONT, 15, "bold"), bg=CARD, fg=FG).pack(anchor="e")
+        tk.Label(d, text=msg, font=(FONT, 11), bg=CARD, fg=MUTED).pack(anchor="e", pady=(2, 10))
+        vs = {}
+        for n in names + [free_label]:
+            v = tk.BooleanVar(value=n in current)
+            tk.Checkbutton(d, text=n, variable=v, font=(FONT, 13), bg=CARD, fg=FG, selectcolor=BG,
+                           activebackground=CARD, activeforeground=FG, anchor="e").pack(anchor="e", pady=2)
+            vs[n] = v
+        res = {"v": None}
+
+        def done(ok):
+            if ok:
+                sel = [n for n, v in vs.items() if v.get()]
+                res["v"] = [free_label] if free_label in sel else sel
+            if d in self.dialogs:
+                self.dialogs.remove(d)
+            d.destroy()
+        row = tk.Frame(d, bg=CARD)
+        row.pack(fill="x", pady=(14, 0))
+        btn(row, "تم", lambda: done(True), bg=GOOD).pack(side="right", padx=4)
+        btn(row, "إلغاء", lambda: done(False), bg=DIM).pack(side="left", padx=4)
+        d.protocol("WM_DELETE_WINDOW", lambda: done(False))
+        d.update_idletasks()
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        d.geometry(f"+{(sw - d.winfo_reqwidth()) // 2}+{(sh - d.winfo_reqheight()) // 3}")
+        d.lift()
+        try:
+            d.wait_visibility()
+            d.grab_set()
+        except Exception:
+            pass
+        self.root.wait_window(d)
+        return res["v"]
 
     def autostart_all(self):
         msg = "البرنامج بيشتغل تلقائياً في كل حسابات ويندوز. ويندوز بيطلب منك موافقة المسؤول."
