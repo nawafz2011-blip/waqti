@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 30
-CHANGES = ("تصليح «🎮 الحين» وأوامر الجوال: البرنامج صار يكلم ntfy أقل بكثير (كان يتعدى الحد اليومي\n"
-           "فيوقفه ntfy). الأوامر توصل من اتصال واحد مفتوح، والحالة تنرسل لما يصير شي.")
+VERSION = 31
+CHANGES = "الوقت صار بنظام 12 ساعة (مثلاً 6:32 م بدل 18:32) في كل مكان."
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -390,13 +389,20 @@ def dur(minutes):
     return f"{hs} و{'نص' if r == 30 else f' {r} دقيقة'}"
 
 
+def h12(dt):
+    """6:32 م بدل 18:32"""
+    h = dt.hour % 12 or 12
+    return f"{h}:{dt.minute:02d} {'ص' if dt.hour < 12 else 'م'}"
+
+
 def now_hm():
-    return datetime.datetime.now().strftime("%H:%M")
+    return h12(datetime.datetime.now())
 
 
 def entry_time(e):
     try:
-        return datetime.datetime.fromisoformat(e["t"]).strftime("%d/%m  %H:%M")
+        d = datetime.datetime.fromisoformat(e["t"])
+        return d.strftime("%d/%m") + "  " + h12(d)
     except Exception:
         return ""
 
@@ -1529,7 +1535,7 @@ class App:
         if self.is_open(name):
             ends = "وقته مفتوح («ما أحد صاحي»)"
         else:
-            ends = f"ينتهي الساعة {(datetime.datetime.now() + datetime.timedelta(seconds=max(0, rem))).strftime('%H:%M')}"
+            ends = f"ينتهي الساعة {h12(datetime.datetime.now() + datetime.timedelta(seconds=max(0, rem)))}"
         ntfy_admin_send(self.cfg, "وقتي", f"🎮 دخل {name}، باقي له {dur(max(0, rem) // 60)}، {ends}")
         self.publish_status(force=True)
         self.show_timer()
@@ -1789,7 +1795,7 @@ class App:
                         self.lock_now()
                 self.update_timer_ui()
             else:
-                self.clock_lbl.configure(text=datetime.datetime.now().strftime("%H:%M"))
+                self.clock_lbl.configure(text=now_hm())
             self.save_tick += 1
             if self.save_tick >= 10:          # كل 10 ثواني نتزامن مع الحسابات الثانية
                 self.save_tick = 0

@@ -169,7 +169,8 @@
   function clean(m) {
     return (m || "").replace(/^⏱ وقتي\n/, "").replace(/\nالساعة \d\d:\d\d$/, "").trim();
   }
-  function hm(ts) { var d = new Date(ts * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2); }
+  function h12(d) { var h = d.getHours() % 12 || 12; return h + ":" + ("0" + d.getMinutes()).slice(-2) + (d.getHours() < 12 ? " ص" : " م"); }
+  function hm(ts) { return h12(new Date(ts * 1000)); }
   function dayName(ts) {
     var d = new Date(ts * 1000), n = new Date(), y = new Date(); y.setDate(n.getDate() - 1);
     if (d.toDateString() === n.toDateString()) return "اليوم";
@@ -283,7 +284,7 @@
         var n = document.createElement("span"); n.className = "n"; n.textContent = p.name;
         var c = document.createElement("span"); c.className = "chip2 c-" + p.state;
         var endAt = new Date(Date.now() + left * 1000);
-        var endTxt = " · ينتهي " + endAt.getHours() + ":" + ("0" + endAt.getMinutes()).slice(-2);
+        var endTxt = " · ينتهي " + h12(endAt);
         c.textContent = { playing: "🟢 يلعب · باقي " + hmLeft(left) + endTxt, open: "🟠 وقت مفتوح", blocked: "🚫 ممنوع",
                           done: "خلص وقته", idle: "باقي " + hmLeft(left) }[p.state] || "";
         r.appendChild(n); r.appendChild(c); nowl.appendChild(r);
