@@ -106,6 +106,15 @@
   <section id="ctl" class="ctl" hidden>
     <div class="ctl-h">👑 تحكم المنظم</div>
     <div id="ppl" class="ppl"></div>
+    <button id="pinbtn" class="b all" type="button">🔑 تغيير رمز الكبير</button>
+    <div id="pinbox" class="ask" hidden>
+      <div class="askt">تغيير رمز الكبير</div>
+      <input id="oldpin" type="password" autocomplete="off" placeholder="الرمز الحالي">
+      <input id="newpin" type="password" autocomplete="off" placeholder="الرمز الجديد">
+      <input id="newpin2" type="password" autocomplete="off" placeholder="أعد الرمز الجديد">
+      <div class="row"><button id="pgo" class="b go" type="button">غيّر الرمز</button><button id="pcancel" class="b" type="button">إلغاء</button></div>
+      <div id="pst" class="st" role="status"></div>
+    </div>
     <div id="ask" class="ask" hidden>
       <div id="askt" class="askt"></div>
       <input id="pin" type="password" autocomplete="off" placeholder="رمز الكبير">
@@ -299,6 +308,38 @@
     var rt = "https://ntfy.sh/" + encodeURIComponent(admin + "-roster");
     fetch(rt + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(gotRoster).catch(function () {});
     try { var res = new EventSource(rt + "/sse"); res.onmessage = function (e) { gotRoster(JSON.stringify(JSON.parse(e.data))); }; } catch (e) {}
+    var pinbox = document.getElementById("pinbox"), pst = document.getElementById("pst");
+    document.getElementById("pinbtn").onclick = function () { pinbox.hidden = false; ask.hidden = true; pst.textContent = "";
+      ["oldpin", "newpin", "newpin2"].forEach(function (i) { document.getElementById(i).value = ""; }); document.getElementById("oldpin").focus(); };
+    document.getElementById("pcancel").onclick = function () { pinbox.hidden = true; };
+    document.getElementById("pgo").onclick = function () {
+      var o = document.getElementById("oldpin").value, n1 = document.getElementById("newpin").value, n2 = document.getElementById("newpin2").value;
+      if (!o.trim() || !n1.trim()) { pst.className = "st bad"; pst.textContent = "اكتب الرمز الحالي والجديد"; return; }
+      if (n1 !== n2) { pst.className = "st bad"; pst.textContent = "الرمزين الجديدة مو نفس بعض"; return; }
+      var ts = String(Date.now()), id = Math.random().toString(36).slice(2, 10), since = Math.floor(Date.now() / 1000) - 5;
+      pst.className = "st"; pst.textContent = "يرسل...";
+      Promise.all([sha("waqti:" + norm(o)), sha("waqti:" + norm(n1))]).then(function (hs) {
+        return sha(hs[0] + "set_pin|" + hs[1] + "|" + ts).then(function (p) {
+          return fetch("https://ntfy.sh/" + encodeURIComponent(admin + "-ok"), { method: "POST",
+            body: JSON.stringify({ cmd: "set_pin", who: hs[1], ts: ts, id: id, p: p }) });
+        });
+      }).then(function () {
+        pst.textContent = "انرسل. ننتظر الكمبيوتر...";
+        var tries = 0;
+        (function poll() {
+          tries++;
+          fetch("https://ntfy.sh/" + encodeURIComponent(admin + "-res-" + id) + "/json?poll=1&since=" + since)
+            .then(function (x) { return x.text(); }).then(function (txt) {
+              var done = null;
+              txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") done = m.message; } catch (e) {} });
+              if (done) { var ok = done.indexOf("✅") >= 0; pst.className = "st " + (ok ? "okc" : "bad"); pst.textContent = ok ? "✅ تغيّر الرمز" : done;
+                if (ok) setTimeout(function () { pinbox.hidden = true; }, 2500); }
+              else if (tries < 25) setTimeout(poll, 3000);
+              else { pst.className = "st bad"; pst.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; }
+            }).catch(function () { if (tries < 25) setTimeout(poll, 3000); });
+        })();
+      }).catch(function () { pst.className = "st bad"; pst.textContent = "ما انرسل. تأكد من النت."; });
+    };
     document.getElementById("cancel").onclick = function () { ask.hidden = true; pending = null; };
     function sha(sv) { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(sv)).then(function (b) {
       return Array.prototype.map.call(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); }); }

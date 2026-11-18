@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 25
-CHANGES = ("جديد في رابط المنظم: «مين يلعب الحين» وكم باقي لكل واحد.\n"
-           "ورسالة لك كل ما أحد يدخل أو يطلع (كم باقي له ومتى ينتهي)، وتقرير كل جمعة.")
+VERSION = 26
+CHANGES = ("جديد في رابط المنظم: «🔑 تغيير الرمز» من جوالك.\n"
+           "وحماية: 5 محاولات رمز غلط من الجوال تقفل أوامر الجوال 15 دقيقة.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -753,7 +753,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -1340,7 +1340,7 @@ class App:
                         d = json.loads(m)
                     except Exception:
                         continue
-                    if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round") and d.get("id"):
+                    if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin") and d.get("id"):
                         self.cmd_queue.append(d)
             finally:
                 self._cmd_polling = False
@@ -1357,11 +1357,34 @@ class App:
             fresh = False
         good = hashlib.sha256((self.cfg["admin_pin"] + f"{cmd}|{who}|{ts}").encode()).hexdigest()
         res_topic = self.cfg["admin_topic"] + "-res-" + cid
-        if not fresh or d.get("p") != good or (cmd != "reset_round" and not self.player(who)):
+        if float(self.state.get("remote_lock") or 0) > time.time():
             if cid not in (self.state.get("cmds_done") or []):
                 self.state_op(lambda st: st.setdefault("cmds_done", []).append(cid))
-                ntfy_admin_send(self.cfg, "وقتي", "❌ الرمز غلط أو الطلب قديم", topic=res_topic)
+                ntfy_admin_send(self.cfg, "وقتي", "🔒 أوامر الجوال مقفلة 15 دقيقة بسبب رموز غلط", topic=res_topic)
             return
+        valid_target = (cmd == "reset_round" or (cmd == "set_pin" and re.fullmatch(r"[0-9a-f]{64}", who))
+                        or self.player(who))
+        if not fresh or d.get("p") != good or not valid_target:
+            if cid not in (self.state.get("cmds_done") or []):
+                wrong = fresh and d.get("p") != good
+                info = {}
+
+                def op_bad(st):
+                    st.setdefault("cmds_done", []).append(cid)
+                    if wrong:
+                        st["remote_fails"] = int(st.get("remote_fails", 0)) + 1
+                        if st["remote_fails"] >= 5:
+                            st["remote_fails"] = 0
+                            st["remote_lock"] = time.time() + 900
+                            info["locked"] = True
+                self.state_op(op_bad)
+                ntfy_admin_send(self.cfg, "وقتي", "❌ الرمز غلط أو الطلب قديم", topic=res_topic)
+                if info.get("locked"):
+                    self.log("remote_locked", "🔒 5 رموز غلط من الجوال: انقفلت أوامر الجوال 15 دقيقة", admin=True)
+            return
+        if cmd == "set_pin":               # كل نسخة شغالة تحدّث الرمز عندها (عشان ما ترجعه القديم)
+            self.cfg["admin_pin"] = who
+            self.save_cfg()
         first = {}
 
         def op(st):
@@ -1369,14 +1392,20 @@ class App:
             first["yes"] = cid not in done
             done.append(cid)
             del done[:-50]
+            st["remote_fails"] = 0
             b = st.setdefault("blocked", [])
-            if cmd in ("reset_time", "reset_round"):
+            if cmd in ("reset_time", "reset_round", "set_pin"):
                 return
             if cmd == "kick" and who not in b:
                 b.append(who)
             if cmd == "allow" and who in b:
                 b.remove(who)
         self.state_op(op)
+        if cmd == "set_pin":
+            if first.get("yes"):
+                self.log("pin_changed", "🔑 الكبير غيّر رمزه من الجوال", admin=True)
+                ntfy_admin_send(self.cfg, "وقتي", "✅ تم", topic=res_topic)
+            return
         if cmd in ("reset_time", "reset_round"):
             if first.get("yes"):
                 self.do_reset("round" if cmd == "reset_round" else "time", who, "المنظم من الجوال")
