@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 22
-CHANGES = "الوقت صار خانتين تحت بعض: ساعات ودقايق (مثلاً 0 ساعة و 1 دقيقة، أو 2 ساعة و 30 دقيقة)."
+VERSION = 23
+CHANGES = "جديد في رابط المنظم: «ريست وقته» جنب كل اسم، و«ريست للكل» (دور جديد والكل يرجع له وقته)."
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1276,7 +1276,7 @@ class App:
                         d = json.loads(m)
                     except Exception:
                         continue
-                    if d.get("cmd") in ("kick", "allow") and d.get("id"):
+                    if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round") and d.get("id"):
                         self.cmd_queue.append(d)
             finally:
                 self._cmd_polling = False
@@ -1293,7 +1293,7 @@ class App:
             fresh = False
         good = hashlib.sha256((self.cfg["admin_pin"] + f"{cmd}|{who}|{ts}").encode()).hexdigest()
         res_topic = self.cfg["admin_topic"] + "-res-" + cid
-        if not fresh or d.get("p") != good or not self.player(who):
+        if not fresh or d.get("p") != good or (cmd != "reset_round" and not self.player(who)):
             if cid not in (self.state.get("cmds_done") or []):
                 self.state_op(lambda st: st.setdefault("cmds_done", []).append(cid))
                 ntfy_admin_send(self.cfg, "وقتي", "❌ الرمز غلط أو الطلب قديم", topic=res_topic)
@@ -1306,11 +1306,20 @@ class App:
             done.append(cid)
             del done[:-50]
             b = st.setdefault("blocked", [])
+            if cmd in ("reset_time", "reset_round"):
+                return
             if cmd == "kick" and who not in b:
                 b.append(who)
             if cmd == "allow" and who in b:
                 b.remove(who)
         self.state_op(op)
+        if cmd in ("reset_time", "reset_round"):
+            if first.get("yes"):
+                self.do_reset("round" if cmd == "reset_round" else "time", who, "المنظم من الجوال")
+                ntfy_admin_send(self.cfg, "وقتي", "✅ تم", topic=res_topic)
+            elif not self.active:
+                self.refresh_lock()
+            return
         if first.get("yes"):
             if cmd == "kick":
                 self.log("kick", f"🚫 المنظم طلّع {who} من الجهاز ومنعه يدخل", who, notify=True)

@@ -57,6 +57,9 @@
   .b { font:inherit; font-weight:700; border:0; border-radius:9px; padding:7px 12px; cursor:pointer; background:var(--line); color:var(--fg); }
   .b.kick { background:rgba(248,113,113,.18); color:var(--red); }
   .b.allow { background:rgba(52,211,153,.16); color:var(--green); }
+  .b.reset { background:rgba(91,140,255,.16); color:var(--blue); }
+  .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
+  .pr .acts { flex-wrap:wrap; justify-content:flex-end; }
   .b.go { background:var(--green); color:#062b1d; }
   .ask { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
   .ask input { font-size:1.3rem; text-align:center; letter-spacing:.3em; padding:10px; border-radius:9px; border:0; }
@@ -216,17 +219,26 @@
       var r = document.createElement("div"); r.className = "pr";
       var nm = document.createElement("span"); nm.className = "n"; nm.textContent = n;
       var acts = document.createElement("div"); acts.className = "acts";
-      [["kick", "طلّعه 🚫"], ["allow", "اسمح له ✅"]].forEach(function (a) {
-        var b = document.createElement("button"); b.type = "button"; b.className = "b " + a[0]; b.textContent = a[1];
+      [["reset_time", "ريست وقته 🔄"], ["kick", "طلّعه 🚫"], ["allow", "اسمح له ✅"]].forEach(function (a) {
+        var b = document.createElement("button"); b.type = "button"; b.className = "b " + (a[0] === "reset_time" ? "reset" : a[0]); b.textContent = a[1];
         b.onclick = function () {
           pending = { cmd: a[0], who: n }; ask.hidden = false; st.textContent = ""; st.className = "st";
-          askt.textContent = a[0] === "kick" ? ("تطلّع " + n + " من الجهاز وتمنعه يدخل؟") : ("تسمح لـ " + n + " يدخل؟");
+          askt.textContent = { kick: "تطلّع " + n + " من الجهاز وتمنعه يدخل؟", allow: "تسمح لـ " + n + " يدخل؟",
+                               reset_time: "ترجع وقت " + n + " كامل؟" }[a[0]];
           pinI.value = ""; pinI.focus();
         };
         acts.appendChild(b);
       });
       r.appendChild(nm); r.appendChild(acts); ppl.appendChild(r);
     });
+    if (people.length) {
+      var all = document.createElement("button"); all.type = "button"; all.className = "b all"; all.textContent = "🔄 ريست للكل (دور جديد، والكل يرجع له وقته)";
+      all.onclick = function () {
+        pending = { cmd: "reset_round", who: "الكل" }; ask.hidden = false; st.textContent = ""; st.className = "st";
+        askt.textContent = "دور جديد والكل يرجع له وقته كامل؟"; pinI.value = ""; pinI.focus();
+      };
+      ppl.appendChild(all);
+    }
     document.getElementById("cancel").onclick = function () { ask.hidden = true; pending = null; };
     function sha(sv) { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(sv)).then(function (b) {
       return Array.prototype.map.call(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); }); }
