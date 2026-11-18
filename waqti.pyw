@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 12
-CHANGES = ("«ما أحد صاحي» صار وقت مفتوح لين تضغط «إنهاء» أو تطلع من الحساب، وبعدها وقتك يصير صفر.\n"
-           "وأول ما يلعب الكل دوره، الكل يرجع له وقته كامل تلقائياً.")
+VERSION = 13
+CHANGES = ("جديد: «عقوبة كذب» في الإعدادات. اللي يكذب في «ما أحد صاحي» يخسر دوره الجاي،\n"
+           "وينحرم من «ما أحد صاحي» أسبوع، وتوصل رسالة للكل.")
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
@@ -626,7 +626,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -821,6 +821,8 @@ class App:
             rem = self.remaining(p["name"])
             if self.is_open(p["name"]):
                 txt, color = f'{p["name"]}\nوقت مفتوح', WARN
+            elif p["name"] in self.state.get("skipped", []) and not self.can_play(p["name"]):
+                txt, color = f'{p["name"]}\nخسر دوره (عقوبة)', DIM
             elif not self.can_play(p["name"]):
                 txt, color = f'{p["name"]}\nلعب هالدور ✓', DIM
             elif rem > 0:
@@ -881,7 +883,9 @@ class App:
                 return
         if not self.can_play(name):
             left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
-            self.info("مو دورك", f"{name}، لعبت هالدور.\nباقي يلعبون: {'، '.join(left)}")
+            why = "خسرت دورك هالمرة (عقوبة كذب)." if name in self.state.get("skipped", []) or \
+                int((self.state.get("penalty") or {}).get(name, {}).get("skip", 0)) > 0 else "لعبت هالدور."
+            self.info("مو دورك", f"{name}، {why}\nباقي يلعبون: {'، '.join(left)}")
             return
         if self.remaining(name) <= 0 and not self.is_open(name):
             self.extension_flow(name, from_lock=True)
@@ -895,6 +899,12 @@ class App:
 
     def can_play(self, name):
         r = self.state.get("round", [])
+        allp = set(self.turn_players())
+        if name in self.state.get("skipped", []):
+            return bool(allp) and allp <= set(r)      # ينتظر لين يخلص هالدور
+        pen = (self.state.get("penalty") or {}).get(name, {})
+        if int(pen.get("skip", 0)) > 0 and r and allp <= set(r):
+            return False                                # دوره الجاي ضايع
         if not r or r[-1] == name or name not in r:
             return True
         return set(self.turn_players()) <= set(r)     # الكل لعب = دور جديد
@@ -915,6 +925,19 @@ class App:
         self.log("open_end", f"{name} أنهى الوقت المفتوح («ما أحد صاحي») بعد {dur(int((time.time() - started) // 60))}، "
                              "ووقته صار صفر", name, notify=True)
 
+    @staticmethod
+    def _new_round(st):
+        """دور جديد: الكل يرجع له وقته، واللي عليه عقوبة يخسر دوره"""
+        st["round"] = []
+        st["used"] = {}
+        st["bonus"] = {}
+        st["skipped"] = []
+        for n, pen in (st.get("penalty") or {}).items():
+            if int(pen.get("skip", 0)) > 0:
+                pen["skip"] = int(pen["skip"]) - 1
+                st["round"].append(n)
+                st["skipped"].append(n)
+
     def check_round_done(self):
         """الكل لعب دوره = دور جديد والكل يرجع له وقته كامل"""
         allp = set(self.turn_players())
@@ -923,12 +946,10 @@ class App:
         if any(self.state.get("active_by", {}).values()) or self.active:
             return   # أحد لسا يلعب في حساب ثاني
 
-        def op(st):
-            st["round"] = []
-            st["used"] = {}
-            st["bonus"] = {}
-        self.state_op(op)
+        self.state_op(self._new_round)
         self.log("round", "🔄 الكل لعب دوره: دور جديد، والكل رجع له وقته كامل", notify=True)
+        for n in self.state.get("skipped", []):
+            self.log("penalty_skip", f"⚖️ {n} خسر دوره هالمرة (عقوبة كذب)", n, notify=True)
 
     def take_turn(self, name):
         allp = set(self.turn_players())
@@ -937,15 +958,39 @@ class App:
         def op(st):
             r = st.setdefault("round", [])
             if r and allp <= set(r) and r[-1] != name:
-                r.clear()
-                st["used"] = {}
-                st["bonus"] = {}
+                self._new_round(st)
+                r = st["round"]
                 info["new"] = True
             if name not in r:
                 r.append(name)
         self.state_op(op)
         if info.get("new"):
             self.log("round", "🔄 الكل لعب دوره: دور جديد، والكل رجع له وقته كامل", notify=True)
+
+    def punish(self, name):
+        v, _ = self.ask("عقوبة كذب", f"{name} كذب في «ما أحد صاحي»؟\n\nالعقوبة:\n"
+                                     "• يخسر دوره الجاي\n• ينحرم من «ما أحد صاحي» أسبوع\n• توصل رسالة للكل",
+                        [("إيه، عاقبه", "y"), ("لا", None)])
+        if not v:
+            return
+        until = time.time() + 7 * 24 * 3600
+
+        def op(st):
+            pen = st.setdefault("penalty", {}).setdefault(name, {})
+            pen["ban"] = until
+            r = st.setdefault("round", [])
+            if name not in r:              # ما لعب هالدور: يخسره الحين
+                r.append(name)
+                st.setdefault("skipped", []).append(name)
+            else:                          # لعب: يخسر الدور الجاي
+                pen["skip"] = int(pen.get("skip", 0)) + 1
+        self.state_op(op)
+        d = datetime.datetime.fromtimestamp(until).strftime("%d/%m")
+        self.log("penalty", f"⚖️ عقوبة كذب على {name}: يخسر دوره الجاي، ومحروم من «ما أحد صاحي» لين {d}",
+                 name, notify=True)
+        if not self.active:
+            self.check_round_done()
+            self.refresh_lock()
 
     def reset_flow(self, who=None):
         who = who or self.active or self.linked_player()
@@ -1108,6 +1153,11 @@ class App:
                 return
             self.grant(name, int(m), "admin")
         elif v == "nobody":
+            ban = float((self.state.get("penalty") or {}).get(name, {}).get("ban", 0))
+            if ban > time.time():
+                until = datetime.datetime.fromtimestamp(ban).strftime("%d/%m")
+                self.info("محروم", f"{name}، أنت محروم من «ما أحد صاحي» لين {until} (عقوبة كذب).")
+                return
             if left <= 0:
                 self.log("nobody_denied", f"⚠️ {name} حاول ياخذ وقت بخيار «ما أحد صاحي» بعد ما خلص الحد حقه اليوم",
                          name, notify=True)
@@ -1116,7 +1166,8 @@ class App:
                 return
             ok, _ = self.ask("متأكد ما أحد صاحي؟",
                              "الوقت يصير مفتوح لين تضغط «إنهاء» أو تطلع من الحساب، وبعدها وقتك يصير صفر.\n"
-                             "بتوصل رسالة للكل، وتنكتب في السجل باسمك والساعة.",
+                             "بتوصل رسالة للكل، وتنكتب في السجل باسمك والساعة.\n\n"
+                             "⚖️ إذا طلع أحد صاحي: تخسر دورك الجاي، وتنحرم من «ما أحد صاحي» أسبوع.",
                              [("إيه، متأكد", "yes"), ("لا", None)])
             if not ok:
                 return
@@ -1468,7 +1519,8 @@ class App:
 
         for label, cmd in (("إضافة", lambda: edit_player()),
                            ("تعديل", lambda: (lambda p: p and edit_player(p))(selected())),
-                           ("حذف", del_player), ("زيادة/نقص وقت", add_time), ("تصفير اليوم", reset_day)):
+                           ("حذف", del_player), ("زيادة/نقص وقت", add_time), ("تصفير اليوم", reset_day),
+                           ("عقوبة كذب", lambda: (lambda p: p and self.punish(p["name"]))(selected()))):
             btn(pbtns, label, cmd, bg=BG, size=10, width=12).pack(pady=2)
         btn(pbtns, "ربط الحسابات", lambda: link_accounts(), bg=GOOD, size=10, width=12).pack(pady=(8, 2))
         refresh_lb()
