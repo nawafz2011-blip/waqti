@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 33
-CHANGES = "شلنا قفل أوامر الجوال (15 دقيقة) بعد الرموز الغلط. الرمز الغلط يقول «غلط» بس."
+VERSION = 34
+CHANGES = ("الدور الجديد ما يبدأ بروحه: لما يخلص وقت الكل، الوقت يرجع لما يبدأ اللي لعب أول.\n"
+           "يعني آخر واحد ما يقدر يرجع يلعب على طول.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -634,6 +635,8 @@ class App:
         else:
             if resume:
                 self.log("updated", f"تحدّث البرنامج للنسخة {VERSION}")
+            if me:
+                self.maybe_open_round(me)
             if me and self.remaining(me) > 0 and self.can_play(me):
                 self.start_session(me)          # دخل حسابه = يبدأ وقته على طول
         self.update_ready = None
@@ -801,7 +804,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -1050,6 +1053,10 @@ class App:
                 txt, color = f'{p["name"]}\nوقت مفتوح', WARN
             elif p["name"] in self.state.get("skipped", []) and not self.can_play(p["name"]):
                 txt, color = f'{p["name"]}\nخسر دوره (عقوبة)', DIM
+            elif self.round_complete() and p["name"] == self.round_opener():
+                txt, color = f'{p["name"]}\nيبدأ الدور الجديد ▶', GOOD
+            elif self.round_complete():
+                txt, color = f'{p["name"]}\nينتظر {self.round_opener()}', DIM
             elif not self.can_play(p["name"]):
                 txt, color = f'{p["name"]}\nخلص وقته ✓', DIM
             elif rem > 0:
@@ -1064,6 +1071,8 @@ class App:
         if r and not set(allp) <= set(r):
             left = [n for n in allp if n not in r]
             rt = "خلص وقتهم:  " + "، ".join(f"{n} ✓" for n in r) + "     ·     باقي:  " + "، ".join(left)
+        elif self.round_complete():
+            rt = f"🏁 الكل خلص وقته · الوقت يرجع لما يبدأ {self.round_opener()}"
         else:
             rt = "دور جديد: الكل عنده وقته كامل"
         if getattr(self, "pending_req", None):
@@ -1111,6 +1120,10 @@ class App:
         if name in (self.state.get("blocked") or []):
             self.info("ممنوع", f"{name}، المنظم طلّعك ومنعك. ما تقدر تدخل لين يسمح لك.")
             return
+        self.maybe_open_round(name)
+        if not self.can_play(name) and self.round_complete():
+            self.info("انتظر", f"{name}، خلص وقت الكل.\nالوقت يرجع للكل لما يبدأ {self.round_opener()} يلعب.")
+            return
         if not self.can_play(name):
             left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
             if name in self.state.get("skipped", []):
@@ -1132,11 +1145,37 @@ class App:
     def turn_players(self):
         return [p["name"] for p in self.cfg["players"] if int(p.get("daily_minutes", 0)) > 0]
 
+    def round_complete(self):
+        allp = set(self.turn_players())
+        return bool(allp) and allp <= set(self.state.get("round", []))
+
+    def round_opener(self):
+        """أول واحد خلص وقته في الدور اللي راح = هو اللي يبدأ الدور الجديد"""
+        r = self.state.get("round", [])
+        skipped = self.state.get("skipped", [])
+        allp = set(self.turn_players())
+        for n in r:
+            if n not in skipped and n in allp and n not in (self.state.get("blocked") or []):
+                return n
+        return r[0] if r else None
+
     def can_play(self, name):
-        """الدور = الوقت: اللي خلص وقته (أو عليه عقوبة) ينتظر لين يخلص وقت الكل"""
+        """الدور = الوقت: اللي خلص وقته (أو عليه عقوبة) ينتظر لين يخلص وقت الكل،
+        وبعدها الدور الجديد يبدأ لما يدخل اللي لعب أول"""
         if name in (self.state.get("blocked") or []):
             return False
+        if self.round_complete():
+            return name == self.round_opener()
         return name not in self.state.get("round", [])
+
+    def maybe_open_round(self, name):
+        """إذا الدور خلص وهذا اللي لعب أول: نبدأ دور جديد والكل يرجع له وقته"""
+        if not self.round_complete() or name != self.round_opener():
+            return
+        self.state_op(self._new_round)
+        self.log("round", f"🔄 {name} بدأ الدور الجديد: الكل رجع له وقته كامل", notify=True)
+        for n in self.state.get("skipped", []):
+            self.log("penalty_skip", f"⚖️ {n} خسر دوره هالمرة (عقوبة كذب)", n, notify=True)
 
     def mark_finished(self, name):
         def op(st):
@@ -1185,11 +1224,12 @@ class App:
             return
         if any(self.state.get("active_by", {}).values()) or self.active:
             return   # أحد لسا يلعب في حساب ثاني
-
-        self.state_op(self._new_round)
-        self.log("round", "🔄 الكل لعب دوره: دور جديد، والكل رجع له وقته كامل", notify=True)
-        for n in self.state.get("skipped", []):
-            self.log("penalty_skip", f"⚖️ {n} خسر دوره هالمرة (عقوبة كذب)", n, notify=True)
+        opener = self.round_opener()
+        mark = "|".join(self.state.get("round", []))
+        if self.state.get("round_announced") == mark:
+            return
+        self.state_op(lambda st: st.update({"round_announced": mark}))
+        self.log("round_done", f"🏁 الكل خلص وقته. الوقت يرجع للكل لما يبدأ {opener} يلعب", notify=True)
 
     def toggle_block(self, name):
         blocked = name in (self.state.get("blocked") or [])
