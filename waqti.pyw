@@ -26,7 +26,7 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 3
+VERSION = 4
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 
@@ -67,6 +67,7 @@ DEFAULT_CONFIG = {
     "day_start_hour": 4,           # اليوم الجديد يبدأ الساعة 4 الفجر
     "telegram_token": "",
     "telegram_chat_id": "",
+    "whatsapp": [],               # [{"name": "...", "phone": "9665...", "apikey": "..."}]
     "autostart": False,
 }
 
@@ -172,8 +173,29 @@ def telegram_send_sync(cfg, text):
         return False, str(ex)
 
 
-def telegram_send(cfg, text):
-    threading.Thread(target=telegram_send_sync, args=(dict(cfg), text), daemon=True).start()
+def whatsapp_send_one(person, text):
+    """واتساب عن طريق خدمة CallMeBot المجانية: كل شخص يفعّلها لرقمه ويعطينا المفتاح حقه"""
+    try:
+        phone = "".join(ch for ch in str(person.get("phone", "")) if ch.isdigit())
+        q = urllib.parse.urlencode({"phone": "+" + phone, "text": text, "apikey": str(person.get("apikey", "")).strip()})
+        with urllib.request.urlopen("https://api.callmebot.com/whatsapp.php?" + q, timeout=20) as r:
+            body = r.read().decode("utf-8", "ignore").lower()
+        if r.status == 200 and ("queued" in body or "sent" in body or "message" in body) and "error" not in body:
+            return True, ""
+        return False, body[:200]
+    except Exception as ex:
+        return False, str(ex)
+
+
+def notify_all(cfg, text):
+    cfg = copy.deepcopy(cfg)
+
+    def run():
+        telegram_send_sync(cfg, text)
+        for person in cfg.get("whatsapp") or []:
+            whatsapp_send_one(person, text)
+            time.sleep(2)  # الخدمة ما تحب الرسائل الكثيرة ورا بعض
+    threading.Thread(target=run, daemon=True).start()
 
 
 # ---------------------------------------------------------------- windows helpers
@@ -341,7 +363,7 @@ class App:
         except Exception:
             pass
         if notify:
-            telegram_send(self.cfg, f"⏱ وقتي\n{text}\nالساعة {now_hm()}")
+            notify_all(self.cfg, f"⏱ وقتي\n{text}\nالساعة {now_hm()}")
 
     def today(self):
         h = int(self.cfg.get("day_start_hour", 4))
@@ -919,6 +941,80 @@ class App:
             e.grid(row=i, column=0, sticky="w", padx=(0, 12), pady=3)
             ents[key] = e
 
+        def manage_whatsapp():
+            w = tk.Toplevel(self.root)
+            w.title("واتساب")
+            w.configure(bg=CARD, padx=20, pady=18)
+            w.attributes("-topmost", True)
+            self.dialogs.append(w)
+
+            def close_w():
+                if w in self.dialogs:
+                    self.dialogs.remove(w)
+                w.destroy()
+
+            w.protocol("WM_DELETE_WINDOW", close_w)
+            tk.Label(w, text="أرقام الواتساب اللي توصلها الرسائل", font=(FONT, 15, "bold"), bg=CARD, fg=FG).pack(anchor="e")
+            tk.Label(w, text="كل شخص لازم يفعّل خدمة CallMeBot لرقمه مرة وحدة وياخذ «المفتاح» (apikey).\n"
+                             "الطريقة في صفحة البرنامج.", font=(FONT, 11), bg=CARD, fg=MUTED,
+                     justify="right").pack(anchor="e", pady=(4, 10))
+            lbw = tk.Listbox(w, font=(FONT, 12), width=40, height=6, justify="right", bg=BG, fg=FG,
+                             selectbackground=ACCENT, relief="flat", exportselection=False)
+            lbw.pack(fill="x")
+
+            def refresh_w():
+                lbw.delete(0, "end")
+                for person in self.cfg["whatsapp"]:
+                    lbw.insert("end", f'{person["name"]} — {person["phone"]}')
+
+            def add_w():
+                v, vals = self.ask("رقم جديد", "اكتب الرقم مع رمز الدولة بدون + وبدون صفر، مثلاً 966501234567",
+                                   [("حفظ", True), ("إلغاء", None)],
+                                   fields=[("الاسم", "", False), ("الرقم", "966", False), ("المفتاح (apikey)", "", False)])
+                if not v:
+                    return
+                name, phone, key = (x.strip() for x in vals)
+                phone = "".join(ch for ch in phone.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")) if ch.isdigit())
+                if not name or len(phone) < 9 or not key:
+                    self.info("خطأ", "اكتب الاسم والرقم كامل والمفتاح.")
+                    return
+                self.cfg["whatsapp"].append({"name": name, "phone": phone, "apikey": key})
+                self.save_cfg()
+                self.log("settings", f"الكبير أضاف رقم واتساب للتنبيهات: {name}")
+                refresh_w()
+
+            def del_w():
+                sel = lbw.curselection()
+                if not sel:
+                    return
+                person = self.cfg["whatsapp"].pop(sel[0])
+                self.save_cfg()
+                self.log("settings", f"الكبير شال رقم واتساب من التنبيهات: {person['name']}", notify=True)
+                refresh_w()
+
+            def test_w():
+                if not self.cfg["whatsapp"]:
+                    self.info("ما فيه أرقام", "ضيف رقم أول.")
+                    return
+                res = []
+                for person in self.cfg["whatsapp"]:
+                    ok, err = whatsapp_send_one(person, "⏱ وقتي: رسالة تجربة. إذا وصلتك، الواتساب شغال ✅")
+                    res.append(f'{person["name"]}: ' + ("وصلت ✅" if ok else f"ما وصلت ❌ {err}"))
+                self.info("تجربة واتساب", "\n".join(res))
+
+            row = tk.Frame(w, bg=CARD)
+            row.pack(fill="x", pady=(12, 0))
+            btn(row, "إضافة رقم", add_w, bg=ACCENT).pack(side="right", padx=4)
+            btn(row, "حذف", del_w, bg=BG).pack(side="right", padx=4)
+            btn(row, "تجربة واتساب", test_w, bg=BG).pack(side="right", padx=4)
+            btn(row, "إغلاق", close_w, bg=DIM).pack(side="left", padx=4)
+            refresh_w()
+            w.update_idletasks()
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            w.geometry(f"+{(sw - w.winfo_reqwidth()) // 2}+{(sh - w.winfo_reqheight()) // 3}")
+            w.lift()
+            w.focus_force()
+
         auto_var = tk.BooleanVar(value=bool(self.cfg.get("autostart")))
         if IS_WIN:
             tk.Checkbutton(s, text="يشتغل تلقائياً مع تشغيل ويندوز", variable=auto_var, font=(FONT, 11),
@@ -984,6 +1080,7 @@ class App:
         bb.pack(fill="x", pady=(16, 0))
         btn(bb, "حفظ وإغلاق", save, bg=GOOD).pack(side="right", padx=4)
         btn(bb, "تجربة تيليجرام", test_tg, bg=BG).pack(side="right", padx=4)
+        btn(bb, "واتساب", manage_whatsapp, bg=GOOD).pack(side="right", padx=4)
         btn(bb, "تغيير رمز الكبير", change_admin_pin, bg=BG).pack(side="right", padx=4)
         btn(bb, "إلغاء", close, bg=DIM).pack(side="left", padx=4)
 
