@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 24
-CHANGES = ("رابط المنظم صار ثابت للأبد: الأسماء توصل للموقع من البرنامج بروحه.\n"
-           "خذ الرابط من الإعدادات مرة أخيرة، وبعدها ما يتغير حتى لو أضفت لاعب.")
+VERSION = 25
+CHANGES = ("جديد في رابط المنظم: «مين يلعب الحين» وكم باقي لكل واحد.\n"
+           "ورسالة لك كل ما أحد يدخل أو يطلع (كم باقي له ومتى ينتهي)، وتقرير كل جمعة.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -738,7 +738,7 @@ class App:
                 if st[k]:
                     st[k + "_by"][USER] = st[k]
                 del st[k]
-        for k in ("used", "bonus", "nobody"):
+        for k in ("used", "bonus", "nobody", "week"):
             st.setdefault(k, {})
         return st
 
@@ -753,12 +753,12 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
                     base = self.base if self.base.get("date") == mine.get("date") else {}
-                    for k in ("used", "bonus", "nobody"):
+                    for k in ("used", "bonus", "nobody", "week"):
                         cur, old = mine.get(k, {}), base.get(k, {})
                         for n in set(cur) | set(old):
                             d = cur.get(n, 0) - old.get(n, 0)
@@ -808,10 +808,11 @@ class App:
         t = self.today()
         if self.state.get("date") != t:
             self.state = {"date": t, "used": {}, "bonus": {}, "nobody": {},
+                          "week": self.state.get("week", {}), "week_id": self.state.get("week_id"),
                           "active": self.state.get("active"), "resume": self.state.get("resume")}
             self.save_state()
             return True
-        for k in ("used", "bonus", "nobody"):
+        for k in ("used", "bonus", "nobody", "week"):
             self.state.setdefault(k, {})
         return False
 
@@ -1276,6 +1277,47 @@ class App:
                 self._polling = False
         threading.Thread(target=run, daemon=True).start()
 
+    def publish_status(self, force=False):
+        """مين يلعب الحين وكم باقي، لرابط المنظم (كل دقيقة لو أحد يلعب، وكل 10 دقايق لو لا)"""
+        playing = {n for n in (self.state.get("active_by") or {}).values() if n}
+        if self.active:
+            playing.add(self.active)
+        last = getattr(self, "_status_sent", 0)
+        gap = 60 if playing else 600
+        if not force and time.time() - last < gap:
+            return
+        self._status_sent = time.time()
+        rows = []
+        for p in self.cfg["players"]:
+            n = p["name"]
+            st = ("blocked" if n in (self.state.get("blocked") or []) else "open" if self.is_open(n)
+                  else "playing" if n in playing else "done" if n in self.state.get("round", []) else "idle")
+            rows.append({"name": n, "state": st, "rem": int(max(0, self.remaining(n)))})
+        ntfy_publish_raw(self.cfg["admin_topic"] + "-status",
+                         json.dumps({"ts": int(time.time()), "players": rows}, ensure_ascii=False))
+
+    def week_id(self):
+        d = datetime.date.fromisoformat(self.today())
+        return (d - datetime.timedelta(days=(d.weekday() - 4) % 7)).isoformat()   # الأسبوع يبدأ الجمعة
+
+    def check_week(self):
+        """تقرير الأسبوع: أول ما يبدأ أسبوع جديد (الجمعة) يرسل ملخص الأسبوع اللي راح"""
+        wid = self.week_id()
+        if self.state.get("week_id") == wid:
+            return
+        info = {}
+
+        def op(st):
+            if st.get("week_id") == wid:
+                return
+            info["old"], info["week"] = st.get("week_id"), dict(st.get("week") or {})
+            st["week_id"], st["week"] = wid, {}
+        self.state_op(op)
+        if info.get("old") and info.get("week"):
+            parts = sorted(info["week"].items(), key=lambda kv: -kv[1])
+            lines = "، ".join(f"{n} {dur(round(sec / 60))}" for n, sec in parts if sec >= 60)
+            self.log("report", f"📊 تقرير الأسبوع: {lines or 'ما أحد لعب'}", notify=True)
+
     def publish_roster(self, force=False):
         """أسماء اللاعبين لموقع المنظم (عشان رابط المنظم يبقى ثابت)"""
         names = [p["name"] for p in self.cfg["players"]]
@@ -1401,6 +1443,13 @@ class App:
         self.warned = rem <= int(self.cfg["warn_minutes"]) * 60
         self.save_state()
         self.log("start", f"{name} بدأ يلعب (باقي له {fmt(rem)})", name)
+        self._session_start = (name, time.time(), self.state["week"].get(name, 0))
+        if self.is_open(name):
+            ends = "وقته مفتوح («ما أحد صاحي»)"
+        else:
+            ends = f"ينتهي الساعة {(datetime.datetime.now() + datetime.timedelta(seconds=max(0, rem))).strftime('%H:%M')}"
+        ntfy_admin_send(self.cfg, "وقتي", f"🎮 دخل {name}، باقي له {dur(max(0, rem) // 60)}، {ends}")
+        self.publish_status(force=True)
         self.show_timer()
 
     def end_session_ask(self):
@@ -1415,6 +1464,12 @@ class App:
 
     def close_session(self):
         name = self.active
+        if name:
+            st = getattr(self, "_session_start", None)
+            played = (self.state["week"].get(name, 0) - st[2]) if st and st[0] == name else 0
+            rem = self.remaining(name)
+            ntfy_admin_send(self.cfg, "وقتي", f"🚪 خرج {name}، لعب {dur(round(played / 60))}، "
+                            + (f"باقي له {dur(round(rem / 60))}" if rem > 0 else "وخلص وقته"))
         self.active = None
         self.grace_left = None
         self.state["active"] = None
@@ -1617,6 +1672,7 @@ class App:
             if name:
                 if self.grace_left is None:
                     self.state["used"][name] = self.state["used"].get(name, 0) + dt
+                    self.state["week"][name] = self.state["week"].get(name, 0) + dt
                     rem = self.remaining(name)
                     warn_s = int(self.cfg["warn_minutes"]) * 60
                     if self.is_open(name):
@@ -1636,6 +1692,7 @@ class App:
                     self.warned = False
                 else:
                     self.grace_left -= dt
+                    self.state["week"][name] = self.state["week"].get(name, 0) + dt
                     if self.grace_left <= 0:
                         self.lock_now()
                 self.update_timer_ui()
@@ -1649,6 +1706,8 @@ class App:
                     self.cfg = load_config()
                     self.refresh_lock()
                 self.publish_roster()
+                self.publish_status()
+                self.check_week()
         except Exception as ex:  # ما نبي البرنامج يطيح
             print("tick error:", ex)
         self.root.after(1000, self.tick)

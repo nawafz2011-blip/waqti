@@ -57,6 +57,17 @@
   .b { font:inherit; font-weight:700; border:0; border-radius:9px; padding:7px 12px; cursor:pointer; background:var(--line); color:var(--fg); }
   .b.kick { background:rgba(248,113,113,.18); color:var(--red); }
   .b.allow { background:rgba(52,211,153,.16); color:var(--green); }
+  .now { border-color:rgba(52,211,153,.4); }
+  .now .ctl-h { color:var(--green); }
+  .nr { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .nr .n { font-weight:600; }
+  .chip2 { font-size:.85rem; font-weight:700; border-radius:999px; padding:3px 12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .c-playing { background:rgba(52,211,153,.16); color:var(--green); }
+  .c-open { background:rgba(251,191,36,.16); color:var(--amber); }
+  .c-blocked { background:rgba(248,113,113,.18); color:var(--red); }
+  .c-done { background:rgba(143,160,187,.14); color:var(--muted); }
+  .c-idle { background:rgba(91,140,255,.14); color:var(--blue); }
+  .nowt { color:var(--muted); font-size:.8rem; }
   .b.reset { background:rgba(91,140,255,.16); color:var(--blue); }
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
   .pr .acts { flex-wrap:wrap; justify-content:flex-end; }
@@ -87,6 +98,11 @@
     <button class="chip" data-f="round" aria-pressed="false">الدور والريست</button>
   </div>
 
+  <section id="now" class="ctl now" hidden>
+    <div class="ctl-h">🎮 الحين</div>
+    <div id="nowl" class="ppl"></div>
+    <div id="nowt" class="nowt"></div>
+  </section>
   <section id="ctl" class="ctl" hidden>
     <div class="ctl-h">👑 تحكم المنظم</div>
     <div id="ppl" class="ppl"></div>
@@ -245,6 +261,32 @@
       ppl.appendChild(all);
     }
     }
+    var nowS = document.getElementById("now"), nowl = document.getElementById("nowl"), nowt = document.getElementById("nowt");
+    var lastStatus = null;
+    function hmLeft(sec) { var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return h ? (h + " س " + m + " د") : (m + " د"); }
+    function drawNow() {
+      if (!lastStatus) return;
+      nowS.hidden = false; nowl.innerHTML = "";
+      lastStatus.players.forEach(function (p) {
+        var r = document.createElement("div"); r.className = "nr";
+        var n = document.createElement("span"); n.className = "n"; n.textContent = p.name;
+        var c = document.createElement("span"); c.className = "chip2 c-" + p.state;
+        c.textContent = { playing: "🟢 يلعب · باقي " + hmLeft(p.rem), open: "🟠 وقت مفتوح", blocked: "🚫 ممنوع",
+                          done: "خلص وقته", idle: "باقي " + hmLeft(p.rem) }[p.state] || "";
+        r.appendChild(n); r.appendChild(c); nowl.appendChild(r);
+      });
+      var ago = Math.max(0, Math.round((Date.now() / 1000 - lastStatus.ts) / 60));
+      nowt.textContent = ago < 2 ? "تحدّث الحين" : ("آخر تحديث قبل " + ago + " دقيقة" + (ago > 15 ? " · الكمبيوتر يمكن مطفي" : ""));
+    }
+    function gotStatus(txt) {
+      txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") { var d = JSON.parse(m.message);
+        if (d.players && (!lastStatus || d.ts >= lastStatus.ts)) lastStatus = d; } } catch (e) {} });
+      drawNow();
+    }
+    var stt = "https://ntfy.sh/" + encodeURIComponent(admin + "-status");
+    fetch(stt + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(gotStatus).catch(function () {});
+    try { var ses = new EventSource(stt + "/sse"); ses.onmessage = function (e) { gotStatus(e.data); }; } catch (e) {}
+    setInterval(drawNow, 30000);
     var rkey = "waqti-roster-" + admin, saved = [];
     try { saved = JSON.parse(localStorage.getItem(rkey) || "[]"); } catch (e) {}
     var fromLink = (q.get("p") || "").split(",").filter(Boolean);
