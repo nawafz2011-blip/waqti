@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 10
-CHANGES = ("جديد: الدور (ما أحد يلعب مرتين لين يلعب الكل)، وزر «ريست الدور» بالرمز أو برسالة للمنظم.\n"
-           "وتصليح «ربط الحسابات»: تضغط على الحساب وتختار صاحبه.")
+VERSION = 11
+CHANGES = "«ريست الدور» صار «ريست الوقت»: يرجع وقت الشخص كامل، بالرمز أو بموافقة المنظم من الجوال."
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
@@ -797,7 +796,7 @@ class App:
         bottom = tk.Frame(lf, bg=BG)
         bottom.pack(pady=(26, 0))
         btn(bottom, "السجل", self.open_log, bg=CARD).pack(side="right", padx=6)
-        btn(bottom, "ريست الدور", lambda: self.reset_flow(), bg=CARD).pack(side="right", padx=6)
+        btn(bottom, "ريست الوقت", lambda: self.reset_flow(), bg=CARD).pack(side="right", padx=6)
         btn(bottom, "الإعدادات", self.open_settings, bg=CARD).pack(side="right", padx=6)
         btn(bottom, "إغلاق البرنامج", self.exit_app, bg=CARD).pack(side="right", padx=6)
         if IS_WIN:
@@ -876,11 +875,7 @@ class App:
                 return
         if not self.can_play(name):
             left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
-            v, _ = self.ask("مو دورك", f"{name}، لعبت هالدور.\nباقي يلعبون: {'، '.join(left)}\n\n"
-                                      "إذا هم نايمين أو ما يبون، اطلب «ريست الدور».",
-                            [("ريست الدور", "reset"), ("إلغاء", None)])
-            if v:
-                self.reset_flow(name)
+            self.info("مو دورك", f"{name}، لعبت هالدور.\nباقي يلعبون: {'، '.join(left)}")
             return
         if self.remaining(name) <= 0:
             self.extension_flow(name, from_lock=True)
@@ -914,21 +909,27 @@ class App:
             self.log("round", "🔄 الكل لعب، بدأ دور جديد")
 
     def reset_flow(self, who=None):
+        who = who or self.active or self.linked_player()
+        if not who:
+            names = [p["name"] for p in self.cfg["players"]]
+            who, _ = self.ask("ريست الوقت", "لمين الريست؟", [(n, n) for n in names] + [("إلغاء", None)])
+            if not who:
+                return
         locked = self.state.get("reset_locked")
         fails = int(self.state.get("reset_fails", 0))
         opts = [] if locked else [("أكتب رمز الكبير", "pin")]
         opts += [("رسالة للمنظم", "msg"), ("إلغاء", None)]
-        msg = "ريست الدور: الكل يقدر يلعب من جديد (الأوقات ما تتغير)."
+        msg = f"ريست الوقت: {who} يرجع له وقته كامل لليوم."
         if locked:
             msg += "\n\n🔒 الرمز انقفل بعد 3 محاولات غلط. لازم موافقة المنظم."
-        v, _ = self.ask("ريست الدور", msg, opts)
+        v, _ = self.ask("ريست الوقت", msg, opts)
         if v == "pin":
             ok, vals = self.ask("رمز الكبير", f"باقي لك {3 - fails} محاولات.", [("تم", True), ("إلغاء", None)],
                                 fields=[("الرمز", "", True)])
             if not ok:
                 return
             if hash_pin(vals[0]) == self.cfg["admin_pin"]:
-                self.do_reset_round("بالرمز")
+                self.do_reset_time(who, "بالرمز")
                 return
             fails += 1
 
@@ -938,11 +939,11 @@ class App:
                     st["reset_locked"] = True
             self.state_op(op)
             if self.state.get("reset_locked"):
-                self.log("reset_locked", "🔒 أحد كتب رمز غلط 3 مرات في «ريست الدور». انقفل، ولازم موافقتك.",
+                self.log("reset_locked", "🔒 أحد كتب رمز غلط 3 مرات في «ريست الوقت». انقفل، ولازم موافقتك.",
                          who, admin=True)
                 self.info("انقفل", "3 محاولات غلط. الرمز انقفل، والمنظم وصلته رسالة.")
             else:
-                self.log("reset_wrong", f"⚠️ رمز غلط في «ريست الدور» ({fails} من 3)", who, admin=True)
+                self.log("reset_wrong", f"⚠️ رمز غلط في «ريست الوقت» ({fails} من 3)", who, admin=True)
                 self.info("غلط", f"الرمز غلط. باقي {3 - fails} محاولات.")
         elif v == "msg":
             self.send_reset_request(who)
@@ -953,10 +954,10 @@ class App:
         q = urllib.parse.urlencode({"t": self.cfg["admin_topic"] + "-ok", "r": req["r"], "n": req["n"],
                                     "w": req["who"]})
         link = PAGES_URL + "?" + q
-        ntfy_admin_send(self.cfg, "وقتي: طلب ريست الدور",
-                        f"{req['who']} يبي ريست للدور. اضغط هنا واكتب الرمز إذا توافق.", click=link)
-        self.log("reset_request", f"📨 {req['who']} طلب ريست للدور من المنظم", who)
-        self.info("انرسلت ✅", "وصلت رسالة للمنظم. أول ما يوافق من جواله، الدور يتصفر بروحه.")
+        ntfy_admin_send(self.cfg, "وقتي: طلب ريست الوقت",
+                        f"{req['who']} يبي ريست لوقته. اضغط هنا واكتب الرمز إذا توافق.", click=link)
+        self.log("reset_request", f"📨 {req['who']} طلب ريست لوقته من المنظم", who)
+        self.info("انرسلت ✅", "وصلت رسالة للمنظم. أول ما يوافق من جواله، الوقت يرجع كامل بروحه.")
         self.refresh_lock()
 
     def poll_reset(self):
@@ -982,20 +983,25 @@ class App:
                     ntfy_admin_send(self.cfg, "وقتي", "✅ تم الريست" if ok else "❌ الرمز غلط",
                                     topic=self.cfg["admin_topic"] + "-res-" + req["r"])
                     if ok:
-                        self.reset_approved = True
+                        self.reset_approved = req["who"]
                         break
             finally:
                 self._polling = False
         threading.Thread(target=run, daemon=True).start()
 
-    def do_reset_round(self, how):
+    def do_reset_time(self, who, how):
         def op(st):
-            st["round"] = []
+            for k in ("used", "bonus", "nobody"):
+                st.setdefault(k, {}).pop(who, None)
             st["reset_fails"] = 0
             st["reset_locked"] = False
         self.state_op(op)
         self.pending_req = None
-        self.log("reset", f"🔄 انعمل ريست للدور ({how})", notify=True)
+        if self.active == who:
+            self.grace_left = None
+            self.warned = False
+            self.update_timer_ui()
+        self.log("reset", f"🔄 رجع وقت {who} كامل ({how})", who, notify=True)
         if not self.active:
             self.refresh_lock()
 
@@ -1166,9 +1172,9 @@ class App:
                 dt = 0
             if not session_active():  # الحساب مقفل أو حساب ثاني قدام الشاشة - ما نحسب
                 dt = 0
-            if getattr(self, "reset_approved", False):
-                self.reset_approved = False
-                self.do_reset_round("بموافقة المنظم من الجوال")
+            if getattr(self, "reset_approved", None):
+                who, self.reset_approved = self.reset_approved, None
+                self.do_reset_time(who, "بموافقة المنظم من الجوال")
             if getattr(self, "pending_req", None) and int(time.time()) % 3 == 0:
                 self.poll_reset()
             if self.free:

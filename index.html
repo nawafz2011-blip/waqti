@@ -23,7 +23,7 @@
 <body>
 <main class="card">
   <h1>⏱ وقتي</h1>
-  <p id="msg">طلب ريست للدور.</p>
+  <p id="msg">طلب ريست للوقت.</p>
   <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="رمز الكبير">
   <button id="go" type="button">وافق على الريست</button>
   <div id="status" role="status"></div>
@@ -36,7 +36,7 @@
   if (!t || !r || !n) { msg.textContent = "الرابط ناقص. افتحه من رسالة البرنامج."; go.disabled = true; return; }
   msg.innerHTML = "";
   var b = document.createElement("span"); b.className = "who"; b.textContent = w;
-  msg.appendChild(b); msg.appendChild(document.createTextNode(" يبي ريست للدور. اكتب رمزك إذا توافق."));
+  msg.appendChild(b); msg.appendChild(document.createTextNode(" يبي ريست لوقته (يرجع وقته كامل). اكتب رمزك إذا توافق."));
 
   function hex(buf) { return Array.prototype.map.call(new Uint8Array(buf), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); }
   function sha(s) { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)).then(hex); }
