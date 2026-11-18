@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 19
-CHANGES = ("جديد: «نسيت الرمز» في نافذة رمز الكبير. يوصلك رمز استرجاع على جوالك (قناة المنظم\n"
-           "ورابط المنظم)، تكتبه في الكمبيوتر وتحط رمز جديد.")
+VERSION = 20
+CHANGES = ("تصليح «ريست الوقت»: صار يسألك دايماً لمين الريست، ويشتغل حتى لو الشخص في المهلة\n"
+           "أو يلعب في حساب ثاني.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -995,6 +995,7 @@ class App:
         p = self.player(name)
         if not p:
             return
+        self.save_state()                         # آخر الأوقات من الحسابات الثانية
         if p.get("pin"):
             v, vals = self.ask(f"رمز {name}", "اكتب رمزك", [("دخول", True), ("إلغاء", None)],
                                fields=[("الرمز", "", True)])
@@ -1132,11 +1133,14 @@ class App:
             self.refresh_lock()
 
     def reset_flow(self, who=None, kind="time"):
-        who = who or self.active or self.linked_player()
+        self.save_state()                         # ناخذ آخر الأوقات من الحسابات الثانية
         if kind == "round":
-            who = who or "أحد"
-        if not who:
-            names = [p["name"] for p in self.cfg["players"]]
+            who = who or self.active or self.linked_player() or "أحد"
+        elif not who:
+            mine = self.linked_players()
+            names = mine + [p["name"] for p in self.cfg["players"] if p["name"] not in mine]
+            if self.active:
+                names = [self.active] + [n for n in names if n != self.active]
             who, _ = self.ask("ريست الوقت", "لمين الريست؟", [(n, n) for n in names] + [("إلغاء", None)])
             if not who:
                 return
@@ -1555,6 +1559,9 @@ class App:
                                  name, notify=True)
                         self.toast("خلص وقتك!", f"عندك {g} دقايق وبعدها ينقفل الجهاز.\n"
                                                 "احفظ لعبتك، أو اطلب وقت إضافي.", BAD)
+                elif self.remaining(name) > 0 or self.is_open(name):
+                    self.grace_left = None    # رجع له وقت (ريست أو وقت إضافي من حساب ثاني)
+                    self.warned = False
                 else:
                     self.grace_left -= dt
                     if self.grace_left <= 0:
