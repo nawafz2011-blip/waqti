@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 13
-CHANGES = ("جديد: «عقوبة كذب» في الإعدادات. اللي يكذب في «ما أحد صاحي» يخسر دوره الجاي،\n"
-           "وينحرم من «ما أحد صاحي» أسبوع، وتوصل رسالة للكل.")
+VERSION = 14
+CHANGES = ("الدور صار ينحسب لما يخلص وقتك بس: تدخل وتطلع براحتك لين يخلص.\n"
+           "وجديد: زر «ريست الدور» (الكل يرجع له وقته) جنب «ريست الوقت».")
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
@@ -801,6 +801,7 @@ class App:
         bottom.pack(pady=(26, 0))
         btn(bottom, "السجل", self.open_log, bg=CARD).pack(side="right", padx=6)
         btn(bottom, "ريست الوقت", lambda: self.reset_flow(), bg=CARD).pack(side="right", padx=6)
+        btn(bottom, "ريست الدور", lambda: self.reset_flow(kind="round"), bg=CARD).pack(side="right", padx=6)
         btn(bottom, "الإعدادات", self.open_settings, bg=CARD).pack(side="right", padx=6)
         btn(bottom, "إغلاق البرنامج", self.exit_app, bg=CARD).pack(side="right", padx=6)
         if IS_WIN:
@@ -824,7 +825,7 @@ class App:
             elif p["name"] in self.state.get("skipped", []) and not self.can_play(p["name"]):
                 txt, color = f'{p["name"]}\nخسر دوره (عقوبة)', DIM
             elif not self.can_play(p["name"]):
-                txt, color = f'{p["name"]}\nلعب هالدور ✓', DIM
+                txt, color = f'{p["name"]}\nخلص وقته ✓', DIM
             elif rem > 0:
                 txt, color = f'{p["name"]}\nباقي {fmt(rem)}', ACCENT
             else:
@@ -836,9 +837,9 @@ class App:
         allp = self.turn_players()
         if r and not set(allp) <= set(r):
             left = [n for n in allp if n not in r]
-            rt = "الدور:  " + "  ←  ".join(f"{n} ✓" for n in r) + "     ·     باقي:  " + "، ".join(left)
+            rt = "خلص وقتهم:  " + "، ".join(f"{n} ✓" for n in r) + "     ·     باقي:  " + "، ".join(left)
         else:
-            rt = "دور جديد: الكل يقدر يلعب"
+            rt = "دور جديد: الكل عنده وقته كامل"
         if getattr(self, "pending_req", None):
             rt += "     ·     📨 بانتظار موافقة المنظم"
         self.round_lbl.configure(text=rt)
@@ -883,9 +884,14 @@ class App:
                 return
         if not self.can_play(name):
             left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
-            why = "خسرت دورك هالمرة (عقوبة كذب)." if name in self.state.get("skipped", []) or \
-                int((self.state.get("penalty") or {}).get(name, {}).get("skip", 0)) > 0 else "لعبت هالدور."
-            self.info("مو دورك", f"{name}، {why}\nباقي يلعبون: {'، '.join(left)}")
+            if name in self.state.get("skipped", []):
+                self.info("مو دورك", f"{name}، خسرت دورك هالمرة (عقوبة كذب).\nباقي: {'، '.join(left)}")
+                return
+            v, _ = self.ask("خلص وقتك", f"{name}، خلص وقتك هالدور.\nلما يخلص وقت {'، '.join(left)}، الكل يرجع له وقته.",
+                            [("وقت إضافي", "extra"), ("إلغاء", None)])
+            if v:
+                self.extension_flow(name, from_lock=True)
+                self.refresh_lock()
             return
         if self.remaining(name) <= 0 and not self.is_open(name):
             self.extension_flow(name, from_lock=True)
@@ -898,16 +904,19 @@ class App:
         return [p["name"] for p in self.cfg["players"] if int(p.get("daily_minutes", 0)) > 0]
 
     def can_play(self, name):
-        r = self.state.get("round", [])
-        allp = set(self.turn_players())
-        if name in self.state.get("skipped", []):
-            return bool(allp) and allp <= set(r)      # ينتظر لين يخلص هالدور
-        pen = (self.state.get("penalty") or {}).get(name, {})
-        if int(pen.get("skip", 0)) > 0 and r and allp <= set(r):
-            return False                                # دوره الجاي ضايع
-        if not r or r[-1] == name or name not in r:
-            return True
-        return set(self.turn_players()) <= set(r)     # الكل لعب = دور جديد
+        """الدور = الوقت: اللي خلص وقته (أو عليه عقوبة) ينتظر لين يخلص وقت الكل"""
+        return name not in self.state.get("round", [])
+
+    def mark_finished(self, name):
+        def op(st):
+            r = st.setdefault("round", [])
+            if name not in r:
+                r.append(name)
+        self.state_op(op)
+
+    def unmark_finished(self, name):
+        if name in self.state.get("round", []) and name not in self.state.get("skipped", []):
+            self.state_op(lambda st: st.setdefault("round", []).remove(name) if name in st.get("round", []) else None)
 
     def is_open(self, name):
         return name in (self.state.get("open") or {})
@@ -951,22 +960,6 @@ class App:
         for n in self.state.get("skipped", []):
             self.log("penalty_skip", f"⚖️ {n} خسر دوره هالمرة (عقوبة كذب)", n, notify=True)
 
-    def take_turn(self, name):
-        allp = set(self.turn_players())
-        info = {}
-
-        def op(st):
-            r = st.setdefault("round", [])
-            if r and allp <= set(r) and r[-1] != name:
-                self._new_round(st)
-                r = st["round"]
-                info["new"] = True
-            if name not in r:
-                r.append(name)
-        self.state_op(op)
-        if info.get("new"):
-            self.log("round", "🔄 الكل لعب دوره: دور جديد، والكل رجع له وقته كامل", notify=True)
-
     def punish(self, name):
         v, _ = self.ask("عقوبة كذب", f"{name} كذب في «ما أحد صاحي»؟\n\nالعقوبة:\n"
                                      "• يخسر دوره الجاي\n• ينحرم من «ما أحد صاحي» أسبوع\n• توصل رسالة للكل",
@@ -992,8 +985,10 @@ class App:
             self.check_round_done()
             self.refresh_lock()
 
-    def reset_flow(self, who=None):
+    def reset_flow(self, who=None, kind="time"):
         who = who or self.active or self.linked_player()
+        if kind == "round":
+            who = who or "أحد"
         if not who:
             names = [p["name"] for p in self.cfg["players"]]
             who, _ = self.ask("ريست الوقت", "لمين الريست؟", [(n, n) for n in names] + [("إلغاء", None)])
@@ -1003,17 +998,19 @@ class App:
         fails = int(self.state.get("reset_fails", 0))
         opts = [] if locked else [("أكتب رمز الكبير", "pin")]
         opts += [("رسالة للمنظم", "msg"), ("إلغاء", None)]
-        msg = f"ريست الوقت: {who} يرجع له وقته كامل لليوم."
+        title = "ريست الدور" if kind == "round" else "ريست الوقت"
+        msg = ("ريست الدور: دور جديد، والكل يرجع له وقته كامل." if kind == "round"
+               else f"ريست الوقت: {who} يرجع له وقته كامل.")
         if locked:
             msg += "\n\n🔒 الرمز انقفل بعد 3 محاولات غلط. لازم موافقة المنظم."
-        v, _ = self.ask("ريست الوقت", msg, opts)
+        v, _ = self.ask(title, msg, opts)
         if v == "pin":
             ok, vals = self.ask("رمز الكبير", f"باقي لك {3 - fails} محاولات.", [("تم", True), ("إلغاء", None)],
                                 fields=[("الرمز", "", True)])
             if not ok:
                 return
             if hash_pin(vals[0]) == self.cfg["admin_pin"]:
-                self.do_reset_time(who, "بالرمز")
+                self.do_reset(kind, who, "بالرمز")
                 return
             fails += 1
 
@@ -1023,25 +1020,27 @@ class App:
                     st["reset_locked"] = True
             self.state_op(op)
             if self.state.get("reset_locked"):
-                self.log("reset_locked", "🔒 أحد كتب رمز غلط 3 مرات في «ريست الوقت». انقفل، ولازم موافقتك.",
+                self.log("reset_locked", f"🔒 أحد كتب رمز غلط 3 مرات في «{title}». انقفل، ولازم موافقتك.",
                          who, admin=True)
                 self.info("انقفل", "3 محاولات غلط. الرمز انقفل، والمنظم وصلته رسالة.")
             else:
-                self.log("reset_wrong", f"⚠️ رمز غلط في «ريست الوقت» ({fails} من 3)", who, admin=True)
+                self.log("reset_wrong", f"⚠️ رمز غلط في «{title}» ({fails} من 3)", who, admin=True)
                 self.info("غلط", f"الرمز غلط. باقي {3 - fails} محاولات.")
         elif v == "msg":
-            self.send_reset_request(who)
+            self.send_reset_request(who, kind)
 
-    def send_reset_request(self, who=None):
-        req = {"r": secrets.token_hex(4), "n": secrets.token_hex(8), "at": time.time() - 5, "who": who or "أحد"}
+    def send_reset_request(self, who=None, kind="time"):
+        req = {"r": secrets.token_hex(4), "n": secrets.token_hex(8), "at": time.time() - 5,
+               "who": who or "أحد", "kind": kind}
         self.pending_req = req
         q = urllib.parse.urlencode({"t": self.cfg["admin_topic"] + "-ok", "r": req["r"], "n": req["n"],
-                                    "w": req["who"]})
+                                    "w": req["who"], "k": kind})
         link = PAGES_URL + "?" + q
-        ntfy_admin_send(self.cfg, "وقتي: طلب ريست الوقت",
-                        f"{req['who']} يبي ريست لوقته. اضغط هنا واكتب الرمز إذا توافق.", click=link)
-        self.log("reset_request", f"📨 {req['who']} طلب ريست لوقته من المنظم", who)
-        self.info("انرسلت ✅", "وصلت رسالة للمنظم. أول ما يوافق من جواله، الوقت يرجع كامل بروحه.")
+        what = "ريست للدور (الكل يرجع له وقته)" if kind == "round" else "ريست لوقته"
+        ntfy_admin_send(self.cfg, "وقتي: طلب " + ("ريست الدور" if kind == "round" else "ريست الوقت"),
+                        f"{req['who']} يبي {what}. اضغط هنا واكتب الرمز إذا توافق.", click=link)
+        self.log("reset_request", f"📨 {req['who']} طلب {what} من المنظم", who)
+        self.info("انرسلت ✅", "وصلت رسالة للمنظم. أول ما يوافق من جواله، يصير الريست بروحه.")
         self.refresh_lock()
 
     def poll_reset(self):
@@ -1067,16 +1066,36 @@ class App:
                     ntfy_admin_send(self.cfg, "وقتي", "✅ تم الريست" if ok else "❌ الرمز غلط",
                                     topic=self.cfg["admin_topic"] + "-res-" + req["r"])
                     if ok:
-                        self.reset_approved = req["who"]
+                        self.reset_approved = (req.get("kind", "time"), req["who"])
                         break
             finally:
                 self._polling = False
         threading.Thread(target=run, daemon=True).start()
 
+    def do_reset(self, kind, who, how):
+        if kind == "round":
+            def op(st):
+                self._new_round(st)
+                st["reset_fails"] = 0
+                st["reset_locked"] = False
+            self.state_op(op)
+            self.pending_req = None
+            if self.active:
+                self.grace_left = None
+                self.warned = False
+                self.update_timer_ui()
+            self.log("reset", f"🔄 ريست للدور ({how}): دور جديد، والكل رجع له وقته كامل", who, notify=True)
+            if not self.active:
+                self.refresh_lock()
+        else:
+            self.do_reset_time(who, how)
+
     def do_reset_time(self, who, how):
         def op(st):
             for k in ("used", "bonus", "nobody"):
                 st.setdefault(k, {}).pop(who, None)
+            if who in st.get("round", []) and who not in st.get("skipped", []):
+                st["round"].remove(who)          # رجع له وقت = ما خلص دوره
             st["reset_fails"] = 0
             st["reset_locked"] = False
         self.state_op(op)
@@ -1091,7 +1110,6 @@ class App:
 
     # ---------- sessions
     def start_session(self, name):
-        self.take_turn(name)
         rem = self.remaining(name)
         self.active = name
         self.state["active"] = name
@@ -1119,6 +1137,8 @@ class App:
         self.save_state()
         if name and self.is_open(name):
             self.end_open(name)
+        if name and self.remaining(name) <= 0 and not self.is_open(name):
+            self.mark_finished(name)
         self.check_round_done()
         self.show_lock()
 
@@ -1182,6 +1202,7 @@ class App:
             st.setdefault("open", {})[name] = time.time()
             st.setdefault("nobody", {})[name] = st["nobody"].get(name, 0) + 1
         self.state_op(op)
+        self.unmark_finished(name)
         self.log("extra_nobody", f"⚠️ {name} فتح الوقت بخيار «ما أحد صاحي»", name, notify=True)
         if self.active == name:
             self.grace_left = None
@@ -1197,6 +1218,8 @@ class App:
         else:
             text = f"الكبير نقّص من وقت {name} {dur(minutes)}"
         self.save_state()
+        if self.remaining(name) > 0:
+            self.unmark_finished(name)
         self.log("extra_" + by, text, name, notify=True)
         if self.active == name and self.remaining(name) > 0:
             self.grace_left = None
@@ -1289,8 +1312,8 @@ class App:
             if not session_active():  # الحساب مقفل أو حساب ثاني قدام الشاشة - ما نحسب
                 dt = 0
             if getattr(self, "reset_approved", None):
-                who, self.reset_approved = self.reset_approved, None
-                self.do_reset_time(who, "بموافقة المنظم من الجوال")
+                (kind, who), self.reset_approved = self.reset_approved, None
+                self.do_reset(kind, who, "بموافقة المنظم من الجوال")
             if getattr(self, "pending_req", None) and int(time.time()) % 3 == 0:
                 self.poll_reset()
             if self.free:
