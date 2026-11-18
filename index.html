@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>وقتي: موافقة المنظم</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --fg:#f1f5f9; --muted:#94a3b8; --accent:#2563eb; --good:#16a34a; --bad:#dc2626; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--fg);
+         font-family: Tahoma, "Segoe UI", system-ui, sans-serif; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .card { background:var(--card); border-radius:16px; padding:28px 22px; width:100%; max-width:380px; display:flex; flex-direction:column; gap:16px; }
+  h1 { margin:0; font-size:1.6rem; }
+  p { margin:0; color:var(--muted); line-height:1.7; }
+  .who { color:var(--fg); font-weight:bold; }
+  input { width:100%; font-size:1.6rem; text-align:center; letter-spacing:.3em; padding:12px; border-radius:10px; border:0; }
+  button { width:100%; font-size:1.2rem; font-weight:bold; padding:14px; border:0; border-radius:10px; background:var(--good); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.6; }
+  #status { min-height:1.6em; font-weight:bold; text-align:center; }
+  .ok { color:#4ade80; } .bad { color:#f87171; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>⏱ وقتي</h1>
+  <p id="msg">طلب ريست للدور.</p>
+  <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="رمز الكبير">
+  <button id="go" type="button">وافق على الريست</button>
+  <div id="status" role="status"></div>
+</main>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var t = q.get("t"), r = q.get("r"), n = q.get("n"), w = q.get("w") || "أحد";
+  var msg = document.getElementById("msg"), st = document.getElementById("status"), go = document.getElementById("go"), pin = document.getElementById("pin");
+  if (!t || !r || !n) { msg.textContent = "الرابط ناقص. افتحه من رسالة البرنامج."; go.disabled = true; return; }
+  msg.innerHTML = "";
+  var b = document.createElement("span"); b.className = "who"; b.textContent = w;
+  msg.appendChild(b); msg.appendChild(document.createTextNode(" يبي ريست للدور. اكتب رمزك إذا توافق."));
+
+  function hex(buf) { return Array.prototype.map.call(new Uint8Array(buf), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); }
+  function sha(s) { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)).then(hex); }
+  function norm(s) { return s.trim().replace(/[٠-٩]/g, function (d) { return d.charCodeAt(0) - 1632; }).replace(/[۰-۹]/g, function (d) { return d.charCodeAt(0) - 1776; }); }
+
+  go.addEventListener("click", function () {
+    if (!pin.value.trim()) { st.className = "bad"; st.textContent = "اكتب الرمز"; return; }
+    go.disabled = true; st.className = ""; st.textContent = "يرسل...";
+    var since = Math.floor(Date.now() / 1000) - 5;
+    sha("waqti:" + norm(pin.value)).then(function (h) { return sha(h + n); }).then(function (p) {
+      return fetch("https://ntfy.sh/" + encodeURIComponent(t), { method: "POST", body: JSON.stringify({ r: r, p: p }) });
+    }).then(function () {
+      st.textContent = "انرسل. ننتظر الكمبيوتر...";
+      var tries = 0, res = t.replace(/-ok$/, "") + "-res-" + r;
+      (function poll() {
+        tries++;
+        fetch("https://ntfy.sh/" + encodeURIComponent(res) + "/json?poll=1&since=" + since).then(function (x) { return x.text(); }).then(function (txt) {
+          var done = null;
+          txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") done = m.message; } catch (e) {} });
+          if (done) {
+            var ok = done.indexOf("✅") >= 0;
+            st.className = ok ? "ok" : "bad"; st.textContent = done;
+            if (!ok) go.disabled = false;
+          } else if (tries < 20) { setTimeout(poll, 3000); }
+          else { st.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; go.disabled = false; }
+        }).catch(function () { if (tries < 20) setTimeout(poll, 3000); });
+      })();
+    }).catch(function () { st.className = "bad"; st.textContent = "ما انرسل. تأكد من النت."; go.disabled = false; });
+  });
+})();
+</script>
+</body>
+</html>

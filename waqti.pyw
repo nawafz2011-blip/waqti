@@ -31,8 +31,10 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 9
-CHANGES = "جديد: الإعدادات ← «ربط الحسابات». تختار لكل حساب ويندوز صاحبه من قائمة (أو «بدون حد»)."
+VERSION = 10
+CHANGES = ("جديد: الدور (ما أحد يلعب مرتين لين يلعب الكل)، وزر «ريست الدور» بالرمز أو برسالة للمنظم.\n"
+           "وتصليح «ربط الحسابات»: تضغط على الحساب وتختار صاحبه.")
+PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 
@@ -85,7 +87,8 @@ TEXT_KEYS = ("telegram_token", "telegram_chat_id", "free_accounts")
 
 
 def hash_pin(pin):
-    return hashlib.sha256(("waqti:" + pin.strip()).encode("utf-8")).hexdigest()
+    pin = pin.strip().translate(str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789"))
+    return hashlib.sha256(("waqti:" + pin).encode("utf-8")).hexdigest()
 
 
 DEFAULT_CONFIG = {
@@ -194,12 +197,49 @@ def session_active():
         return True
 
 
+def ntfy_admin_send(cfg, title, text, click=None, topic=None):
+    """رسالة للمنظم بس (قناة خاصة فيه)"""
+    def run():
+        try:
+            body = {"topic": topic or cfg["admin_topic"], "title": title, "message": text,
+                    "priority": 4, "tags": ["stopwatch"]}
+            if click:
+                body["click"] = click
+                body["actions"] = [{"action": "view", "label": "افتح ووافق", "url": click}]
+            req = urllib.request.Request("https://ntfy.sh/", data=json.dumps(body).encode("utf-8"),
+                                         method="POST", headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=15).close()
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
+
+
+def ntfy_poll(topic, since):
+    """يرجع الرسائل اللي وصلت للقناة من وقت معين"""
+    try:
+        url = f"https://ntfy.sh/{topic}/json?poll=1&since={int(since)}"
+        with urllib.request.urlopen(url, timeout=15) as r:
+            out = []
+            for line in r.read().decode("utf-8", "ignore").splitlines():
+                try:
+                    m = json.loads(line)
+                    if m.get("event") == "message":
+                        out.append(m.get("message", ""))
+                except Exception:
+                    pass
+            return out
+    except Exception:
+        return []
+
+
 def load_config():
     cfg = load_json(CONFIG_PATH, DEFAULT_CONFIG)
     for k, v in DEFAULT_CONFIG.items():
         cfg.setdefault(k, copy.deepcopy(v))
     if not cfg.get("ntfy_topic"):
         cfg["ntfy_topic"] = new_topic()
+    if not cfg.get("admin_topic"):
+        cfg["admin_topic"] = "waqti-admin-" + secrets.token_hex(6)
     save_json(CONFIG_PATH, cfg)
     return cfg
 
@@ -348,7 +388,8 @@ def windows_accounts():
                     sk = winreg.OpenKey(k, sid)
                     path = winreg.QueryValueEx(sk, "ProfileImagePath")[0]
                     n = os.path.basename(os.path.expandvars(path)).strip().lower()
-                    if n and not n.startswith("defaultuser"):
+                    if n and not n.startswith("defaultuser") and n not in (
+                            "wsiaccount", "wdagutilityaccount", "defaultaccount", "guest"):
                         names.append(n)
                 except OSError:
                     pass
@@ -444,7 +485,7 @@ class App:
         else:
             if resume:
                 self.log("updated", f"تحدّث البرنامج للنسخة {VERSION}")
-            if me and self.remaining(me) > 0:
+            if me and self.remaining(me) > 0 and self.can_play(me):
                 self.start_session(me)          # دخل حسابه = يبدأ وقته على طول
         self.update_ready = None
         self.root.after(1000, self.tick)
@@ -572,15 +613,20 @@ class App:
             st.setdefault(k, {})
         return st
 
-    def sync_state(self):
+    def state_op(self, fn):
+        """تعديل مباشر على الملف المشترك (للدور والريست)"""
+        self.sync_state(op=fn)
+
+    def sync_state(self, op=None):
         """نحفظ تغييراتنا وناخذ تغييرات الحسابات الثانية (كل حساب له نسخة من البرنامج)"""
         with file_lock():
             disk = self._disk_state()
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
-                            "active_by": disk["active_by"], "resume_by": disk["resume_by"]}
+                            "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
                     base = self.base if self.base.get("date") == mine.get("date") else {}
                     for k in ("used", "bonus", "nobody"):
@@ -596,7 +642,9 @@ class App:
                     disk["resume_by"][USER] = mine["resume"]
                 else:
                     disk["resume_by"].pop(USER, None)
-            if mine or disk.get("date"):
+            if op:
+                op(disk)
+            if mine or disk.get("date") or op:
                 save_json(STATE_PATH, disk)
         self.base = copy.deepcopy(disk)
         st = copy.deepcopy(disk)
@@ -610,7 +658,7 @@ class App:
     def save_cfg(self):
         save_json(CONFIG_PATH, self.cfg)
 
-    def log(self, kind, text, player=None, notify=False):
+    def log(self, kind, text, player=None, notify=False, admin=False):
         e = {"t": datetime.datetime.now().isoformat(timespec="seconds"),
              "kind": kind, "player": player, "text": text}
         try:
@@ -620,6 +668,8 @@ class App:
             pass
         if notify:
             notify_all(self.cfg, f"⏱ وقتي\n{text}\nالساعة {now_hm()}")
+        if admin:
+            ntfy_admin_send(self.cfg, "وقتي: تنبيه للمنظم", f"{text}\nالساعة {now_hm()}")
 
     def today(self):
         h = int(self.cfg.get("day_start_hour", 4))
@@ -719,7 +769,7 @@ class App:
             return False
         if hash_pin(vals[0]) == self.cfg["admin_pin"]:
             return True
-        self.log("wrong_admin_pin", "⚠️ أحد حاول يدخل برمز الكبير وكان الرمز غلط", self.active, notify=True)
+        self.log("wrong_admin_pin", "⚠️ أحد حاول يدخل برمز الكبير وكان الرمز غلط", self.active, admin=True)
         self.info("خطأ", "الرمز غلط. وانكتبت المحاولة في السجل.")
         return False
 
@@ -741,10 +791,13 @@ class App:
         tk.Label(lf, text="مين بيلعب الحين؟", font=(FONT, 22, "bold"), bg=BG, fg=FG).pack(pady=(34, 12))
         self.players_frame = tk.Frame(lf, bg=BG)
         self.players_frame.pack()
+        self.round_lbl = tk.Label(lf, text="", font=(FONT, 13), bg=BG, fg=MUTED)
+        self.round_lbl.pack(pady=(6, 0))
 
         bottom = tk.Frame(lf, bg=BG)
         bottom.pack(pady=(26, 0))
         btn(bottom, "السجل", self.open_log, bg=CARD).pack(side="right", padx=6)
+        btn(bottom, "ريست الدور", lambda: self.reset_flow(), bg=CARD).pack(side="right", padx=6)
         btn(bottom, "الإعدادات", self.open_settings, bg=CARD).pack(side="right", padx=6)
         btn(bottom, "إغلاق البرنامج", self.exit_app, bg=CARD).pack(side="right", padx=6)
         if IS_WIN:
@@ -763,13 +816,25 @@ class App:
         cols = 4
         for i, p in enumerate(self.cfg["players"]):
             rem = self.remaining(p["name"])
-            if rem > 0:
+            if not self.can_play(p["name"]):
+                txt, color = f'{p["name"]}\nلعب هالدور ✓', DIM
+            elif rem > 0:
                 txt, color = f'{p["name"]}\nباقي {fmt(rem)}', ACCENT
             else:
                 txt, color = f'{p["name"]}\nخلص وقته', DIM
             b = btn(self.players_frame, txt, lambda n=p["name"]: self.choose_player(n),
                     bg=color, size=16, width=12)
             b.grid(row=i // cols, column=cols - 1 - (i % cols), padx=10, pady=10)
+        r = self.state.get("round", [])
+        allp = self.turn_players()
+        if r and not set(allp) <= set(r):
+            left = [n for n in allp if n not in r]
+            rt = "الدور:  " + "  ←  ".join(f"{n} ✓" for n in r) + "     ·     باقي:  " + "، ".join(left)
+        else:
+            rt = "دور جديد: الكل يقدر يلعب"
+        if getattr(self, "pending_req", None):
+            rt += "     ·     📨 بانتظار موافقة المنظم"
+        self.round_lbl.configure(text=rt)
         hide = ("app_start", "update_fail", "updated")
         lines = []
         for e in read_log(30):
@@ -806,17 +871,137 @@ class App:
             if not v:
                 return
             if hash_pin(vals[0]) != p["pin"]:
-                self.log("wrong_pin", f"⚠️ محاولة دخول على حساب {name} برمز غلط", name, notify=True)
+                self.log("wrong_pin", f"⚠️ محاولة دخول على حساب {name} برمز غلط", name, admin=True)
                 self.info("خطأ", "الرمز غلط. وانكتبت المحاولة في السجل.")
                 return
+        if not self.can_play(name):
+            left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
+            v, _ = self.ask("مو دورك", f"{name}، لعبت هالدور.\nباقي يلعبون: {'، '.join(left)}\n\n"
+                                      "إذا هم نايمين أو ما يبون، اطلب «ريست الدور».",
+                            [("ريست الدور", "reset"), ("إلغاء", None)])
+            if v:
+                self.reset_flow(name)
+            return
         if self.remaining(name) <= 0:
             self.extension_flow(name, from_lock=True)
             self.refresh_lock()
             return
         self.start_session(name)
 
+    # ---------- turns (الدور)
+    def turn_players(self):
+        return [p["name"] for p in self.cfg["players"] if int(p.get("daily_minutes", 0)) > 0]
+
+    def can_play(self, name):
+        r = self.state.get("round", [])
+        if not r or r[-1] == name or name not in r:
+            return True
+        return set(self.turn_players()) <= set(r)     # الكل لعب = دور جديد
+
+    def take_turn(self, name):
+        allp = set(self.turn_players())
+        info = {}
+
+        def op(st):
+            r = st.setdefault("round", [])
+            if r and allp <= set(r) and r[-1] != name:
+                r.clear()
+                info["new"] = True
+            if name not in r:
+                r.append(name)
+        self.state_op(op)
+        if info.get("new"):
+            self.log("round", "🔄 الكل لعب، بدأ دور جديد")
+
+    def reset_flow(self, who=None):
+        locked = self.state.get("reset_locked")
+        fails = int(self.state.get("reset_fails", 0))
+        opts = [] if locked else [("أكتب رمز الكبير", "pin")]
+        opts += [("رسالة للمنظم", "msg"), ("إلغاء", None)]
+        msg = "ريست الدور: الكل يقدر يلعب من جديد (الأوقات ما تتغير)."
+        if locked:
+            msg += "\n\n🔒 الرمز انقفل بعد 3 محاولات غلط. لازم موافقة المنظم."
+        v, _ = self.ask("ريست الدور", msg, opts)
+        if v == "pin":
+            ok, vals = self.ask("رمز الكبير", f"باقي لك {3 - fails} محاولات.", [("تم", True), ("إلغاء", None)],
+                                fields=[("الرمز", "", True)])
+            if not ok:
+                return
+            if hash_pin(vals[0]) == self.cfg["admin_pin"]:
+                self.do_reset_round("بالرمز")
+                return
+            fails += 1
+
+            def op(st):
+                st["reset_fails"] = int(st.get("reset_fails", 0)) + 1
+                if st["reset_fails"] >= 3:
+                    st["reset_locked"] = True
+            self.state_op(op)
+            if self.state.get("reset_locked"):
+                self.log("reset_locked", "🔒 أحد كتب رمز غلط 3 مرات في «ريست الدور». انقفل، ولازم موافقتك.",
+                         who, admin=True)
+                self.info("انقفل", "3 محاولات غلط. الرمز انقفل، والمنظم وصلته رسالة.")
+            else:
+                self.log("reset_wrong", f"⚠️ رمز غلط في «ريست الدور» ({fails} من 3)", who, admin=True)
+                self.info("غلط", f"الرمز غلط. باقي {3 - fails} محاولات.")
+        elif v == "msg":
+            self.send_reset_request(who)
+
+    def send_reset_request(self, who=None):
+        req = {"r": secrets.token_hex(4), "n": secrets.token_hex(8), "at": time.time() - 5, "who": who or "أحد"}
+        self.pending_req = req
+        q = urllib.parse.urlencode({"t": self.cfg["admin_topic"] + "-ok", "r": req["r"], "n": req["n"],
+                                    "w": req["who"]})
+        link = PAGES_URL + "?" + q
+        ntfy_admin_send(self.cfg, "وقتي: طلب ريست الدور",
+                        f"{req['who']} يبي ريست للدور. اضغط هنا واكتب الرمز إذا توافق.", click=link)
+        self.log("reset_request", f"📨 {req['who']} طلب ريست للدور من المنظم", who)
+        self.info("انرسلت ✅", "وصلت رسالة للمنظم. أول ما يوافق من جواله، الدور يتصفر بروحه.")
+        self.refresh_lock()
+
+    def poll_reset(self):
+        req = getattr(self, "pending_req", None)
+        if not req or getattr(self, "_polling", False):
+            return
+        if time.time() - req["at"] > 3600:
+            self.pending_req = None
+            return
+        self._polling = True
+
+        def run():
+            try:
+                good = hashlib.sha256((self.cfg["admin_pin"] + req["n"]).encode()).hexdigest()
+                for m in ntfy_poll(self.cfg["admin_topic"] + "-ok", req["at"]):
+                    try:
+                        d = json.loads(m)
+                    except Exception:
+                        continue
+                    if d.get("r") != req["r"]:
+                        continue
+                    ok = d.get("p") == good
+                    ntfy_admin_send(self.cfg, "وقتي", "✅ تم الريست" if ok else "❌ الرمز غلط",
+                                    topic=self.cfg["admin_topic"] + "-res-" + req["r"])
+                    if ok:
+                        self.reset_approved = True
+                        break
+            finally:
+                self._polling = False
+        threading.Thread(target=run, daemon=True).start()
+
+    def do_reset_round(self, how):
+        def op(st):
+            st["round"] = []
+            st["reset_fails"] = 0
+            st["reset_locked"] = False
+        self.state_op(op)
+        self.pending_req = None
+        self.log("reset", f"🔄 انعمل ريست للدور ({how})", notify=True)
+        if not self.active:
+            self.refresh_lock()
+
     # ---------- sessions
     def start_session(self, name):
+        self.take_turn(name)
         rem = self.remaining(name)
         self.active = name
         self.state["active"] = name
@@ -981,6 +1166,11 @@ class App:
                 dt = 0
             if not session_active():  # الحساب مقفل أو حساب ثاني قدام الشاشة - ما نحسب
                 dt = 0
+            if getattr(self, "reset_approved", False):
+                self.reset_approved = False
+                self.do_reset_round("بموافقة المنظم من الجوال")
+            if getattr(self, "pending_req", None) and int(time.time()) % 3 == 0:
+                self.poll_reset()
             if self.free:
                 self.root.after(1000, self.tick)
                 return
@@ -1217,7 +1407,7 @@ class App:
             w.attributes("-topmost", True)
             self.dialogs.append(w)
             tk.Label(w, text="ربط الحسابات", font=(FONT, 16, "bold"), bg=CARD, fg=FG).pack(anchor="e")
-            tk.Label(w, text="اختر لكل حساب ويندوز صاحبه. إذا دخل حسابه، يبدأ وقته على طول.",
+            tk.Label(w, text="اضغط على الزر جنب كل حساب واختر صاحبه. إذا دخل حسابه، يبدأ وقته على طول.",
                      font=(FONT, 11), bg=CARD, fg=MUTED).pack(anchor="e", pady=(2, 12))
             NONE, FREE = "—  (يختار اسمه بنفسه)", "بدون حد للوقت"
             options = [NONE, FREE] + [p["name"] for p in self.cfg["players"]]
@@ -1235,11 +1425,16 @@ class App:
                 label = acc + ("   (أنت)" if acc == USER else "")
                 tk.Label(grid, text=label, font=(FONT, 12, "bold"), bg=CARD, fg=FG).grid(row=i, column=1, sticky="e", pady=4)
                 v = tk.StringVar(value=cur)
-                om = tk.OptionMenu(grid, v, *options)
-                om.configure(font=(FONT, 11), bg=BG, fg=FG, activebackground=ACCENT, activeforeground=FG,
-                             highlightthickness=0, relief="flat", width=22)
-                om["menu"].configure(font=(FONT, 11))
-                om.grid(row=i, column=0, sticky="w", padx=(0, 14), pady=4)
+                b = btn(grid, cur, None, bg=BG, size=11, width=22)
+
+                def pick(acc=acc, v=v, b=b):
+                    ch, _ = self.ask(f"حساب {acc}", "مين صاحب هالحساب؟",
+                                     [(o, o) for o in options[2:]] + [(FREE, FREE), ("بدون ربط", NONE)])
+                    if ch:
+                        v.set(ch)
+                        b.configure(text=ch)
+                b.configure(command=pick)
+                b.grid(row=i, column=0, sticky="w", padx=(0, 14), pady=4)
                 vars_[acc] = v
 
             def close_w():
@@ -1375,6 +1570,7 @@ class App:
         btn(bb, "حفظ وإغلاق", save, bg=GOOD).pack(side="right", padx=4)
         btn(bb, "تجربة تيليجرام", test_tg, bg=BG).pack(side="right", padx=4)
         btn(bb, "رابط الإشعارات", self.show_ntfy, bg=GOOD).pack(side="right", padx=4)
+        btn(bb, "قناة المنظم", self.show_admin_channel, bg=GOOD).pack(side="right", padx=4)
         if IS_WIN:
             btn(bb, "تشغيل لكل الحسابات", self.autostart_all, bg=BG).pack(side="right", padx=4)
         btn(bb, "تغيير رمز الكبير", change_admin_pin, bg=BG).pack(side="right", padx=4)
@@ -1395,6 +1591,17 @@ class App:
         if v:
             ok = set_autostart_all()
             self.info("تشغيل لكل الحسابات", "تم ✅ (إذا وافقت على رسالة ويندوز)" if ok else "ما تم. لازم توافق على رسالة ويندوز.")
+
+    def show_admin_channel(self):
+        v, _ = self.ask("قناة المنظم (لك بس)",
+                        "طلبات الريست والمحاولات الغلط توصلك أنت بس، على تطبيق ntfy في جوالك:\n"
+                        "افتح ntfy ← اضغط + ← اكتب هالاسم بالضبط ← Subscribe.\n"
+                        "لا تعطيه أحد.",
+                        [("تجربة", "test"), ("إغلاق", None)],
+                        fields=[("اسم القناة", self.cfg["admin_topic"], False)])
+        if v == "test":
+            ntfy_admin_send(self.cfg, "وقتي", "رسالة تجربة للمنظم ✅")
+            self.info("انرسلت", "إذا مشترك في القناة، المفروض وصلتك.")
 
     def show_ntfy(self):
         while True:
