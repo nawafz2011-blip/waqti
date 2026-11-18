@@ -9,7 +9,9 @@
 - السجل ظاهر للكل على شاشة القفل.
 """
 import copy
+import contextlib
 import datetime
+import getpass
 import hashlib
 import json
 import os
@@ -29,12 +31,39 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 6
+VERSION = 7
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 
-DATA_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "Waqti")
+try:
+    USER = getpass.getuser().strip().lower()
+except Exception:
+    USER = "user"
+
+# مجلد مشترك بين كل حسابات ويندوز (C:\ProgramData\Waqti)
+OLD_DATA_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "Waqti")
+if os.environ.get("WAQTI_DATA"):
+    DATA_DIR = os.environ["WAQTI_DATA"]
+elif IS_WIN:
+    DATA_DIR = os.path.join(os.environ.get("ProgramData") or r"C:\ProgramData", "Waqti")
+else:
+    DATA_DIR = OLD_DATA_DIR
+_new_dir = not os.path.isdir(DATA_DIR)
 os.makedirs(DATA_DIR, exist_ok=True)
+if IS_WIN and (_new_dir or not os.path.exists(os.path.join(DATA_DIR, ".shared"))):
+    try:   # نخلي كل الحسابات تقدر تكتب في المجلد
+        subprocess.run(["icacls", DATA_DIR, "/grant", "*S-1-5-32-545:(OI)(CI)M", "/T", "/Q"],
+                       creationflags=0x08000000, timeout=30, capture_output=True)
+        open(os.path.join(DATA_DIR, ".shared"), "w").close()
+    except Exception:
+        pass
+if os.path.normcase(DATA_DIR) != os.path.normcase(OLD_DATA_DIR) and \
+        not os.path.exists(os.path.join(DATA_DIR, "config.json")):
+    for _f in ("config.json", "state.json", "log.jsonl"):   # ننقل البيانات القديمة
+        try:
+            shutil.copyfile(os.path.join(OLD_DATA_DIR, _f), os.path.join(DATA_DIR, _f))
+        except Exception:
+            pass
 CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 LOG_PATH = os.path.join(DATA_DIR, "log.jsonl")
@@ -51,6 +80,7 @@ BAD = "#dc2626"
 DIM = "#475569"
 
 KEEP = "(بدون تغيير)"
+TEXT_KEYS = ("telegram_token", "telegram_chat_id", "free_accounts")
 
 
 def hash_pin(pin):
@@ -68,6 +98,7 @@ DEFAULT_CONFIG = {
     "nobody_awake_minutes": 30,    # كم دقيقة يعطي خيار "ما أحد صاحي"
     "nobody_awake_per_day": 1,     # كم مرة باليوم لكل لاعب
     "day_start_hour": 4,           # اليوم الجديد يبدأ الساعة 4 الفجر
+    "free_accounts": "",          # حسابات ويندوز بدون حد، مفصولة بفاصلة
     "ntfy_topic": "",             # اسم صفحة الإشعارات على ntfy.sh (ينصنع تلقائياً)
     "telegram_token": "",
     "telegram_chat_id": "",
@@ -111,6 +142,55 @@ def ntfy_send_sync(cfg, text):
             return r.status == 200, ""
     except Exception as ex:
         return False, str(ex)
+
+
+@contextlib.contextmanager
+def file_lock(name="state.lock"):
+    path = os.path.join(DATA_DIR, name)
+    fd = None
+    for _ in range(100):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(path) > 10:
+                    os.remove(path)
+            except Exception:
+                pass
+            time.sleep(0.05)
+        except Exception:
+            break
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+
+def session_active():
+    """هل هذا الحساب هو اللي قدام الشاشة الحين؟ (مو مقفل ومو حساب ثاني)"""
+    if not IS_WIN:
+        return True
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        sid = ctypes.c_ulong()
+        k.ProcessIdToSessionId(k.GetCurrentProcessId(), ctypes.byref(sid))
+        if k.WTSGetActiveConsoleSessionId() != sid.value:
+            return False
+        u = ctypes.windll.user32
+        h = u.OpenInputDesktop(0, False, 0x0100)
+        if not h:
+            return False
+        u.CloseDesktop(h)
+        return True
+    except Exception:
+        return True
 
 
 def load_config():
@@ -246,6 +326,22 @@ def set_autostart(on):
         winreg.CloseKey(key)
 
 
+def python_cmd():
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    pyw = sys.executable.replace("python.exe", "pythonw.exe")
+    return f'"{pyw}" "{os.path.abspath(__file__)}"'
+
+
+def set_autostart_all():
+    """تشغيل تلقائي لكل الحسابات (يطلب موافقة المسؤول من ويندوز)"""
+    import ctypes
+    cmd = python_cmd().replace('"', '\\"')
+    params = f'add "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v Waqti /t REG_SZ /d "{cmd}" /f'
+    r = ctypes.windll.shell32.ShellExecuteW(None, "runas", "reg.exe", params, None, 0)
+    return r > 32
+
+
 def beep():
     if IS_WIN:
         try:
@@ -271,7 +367,10 @@ class App:
         self.root = tk.Tk()
         self.root.title("وقتي")
         self.cfg = load_config()
-        self.state = load_json(STATE_PATH, {})
+        self.state = {}
+        self.base = {}
+        self.free = False
+        self.sync_state()
         self.dialogs = []
         self.active = None
         self.grace_left = None
@@ -296,17 +395,68 @@ class App:
             except Exception:
                 pass
 
+        self.save_state()
         self.setup_lock_window()
         self.setup_timer_window()
-        self.show_lock()
-        if resume and self.state.get("active") == resume.get("name"):
+        me = self.linked_player()
+        if self.is_free_account():
+            self.show_free()
+        else:
+            self.show_lock()
+        if self.free:
+            if resume:
+                self.log("updated", f"تحدّث البرنامج للنسخة {VERSION}")
+        elif resume and self.state.get("active") == resume.get("name"):
             self.continue_session(resume)
-        elif resume:
-            self.log("updated", f"تحدّث البرنامج للنسخة {VERSION}")
+        else:
+            if resume:
+                self.log("updated", f"تحدّث البرنامج للنسخة {VERSION}")
+            if me and self.remaining(me) > 0:
+                self.start_session(me)          # دخل حسابه = يبدأ وقته على طول
         self.update_ready = None
         self.root.after(1000, self.tick)
         self.root.after(500, self.keep_on_top)
         self.root.after(5000, self.check_update)
+
+    # ---------- windows accounts
+    def linked_player(self):
+        for p in self.cfg["players"]:
+            if (p.get("windows_user") or "").strip().lower() == USER:
+                return p["name"]
+        return None
+
+    def is_free_account(self):
+        free = [a.strip().lower() for a in str(self.cfg.get("free_accounts", "")).replace("،", ",").split(",")]
+        return USER in [a for a in free if a]
+
+    def show_free(self):
+        """حساب بدون حد (حساب الكبير): نافذة صغيرة عادية فيها الإعدادات والسجل"""
+        self.free = True
+        r = self.root
+        self.lock_frame.place_forget()
+        r.overrideredirect(False)
+        r.attributes("-topmost", False)
+        r.title("وقتي")
+        if not hasattr(self, "free_frame"):
+            self.free_frame = tk.Frame(r, bg=BG, padx=20, pady=16)
+            tk.Label(self.free_frame, text="⏱ وقتي", font=(FONT, 18, "bold"), bg=BG, fg=FG).pack()
+            tk.Label(self.free_frame, text=f"حساب {USER}: بدون حد للوقت", font=(FONT, 11), bg=BG,
+                     fg=MUTED).pack(pady=(2, 12))
+            row = tk.Frame(self.free_frame, bg=BG)
+            row.pack()
+            btn(row, "السجل", self.open_log, bg=CARD, size=10).pack(side="right", padx=4)
+            btn(row, "الإعدادات", self.open_settings, bg=CARD, size=10).pack(side="right", padx=4)
+            btn(row, "إغلاق البرنامج", self.exit_app, bg=CARD, size=10).pack(side="right", padx=4)
+        self.free_frame.pack(fill="both", expand=True)
+        r.geometry("")
+        r.deiconify()
+        r.protocol("WM_DELETE_WINDOW", r.iconify)
+        r.iconify()
+
+    def logoff(self):
+        v, _ = self.ask("تسجيل خروج", "تطلع من حساب ويندوز؟ (احفظ شغلك أول)", [("إيه، اطلع", "y"), ("لا", None)])
+        if v and IS_WIN:
+            subprocess.Popen(["shutdown", "/l"], creationflags=0x08000000)
 
     # ---------- auto update
     def check_update(self):
@@ -369,8 +519,53 @@ class App:
         self.show_timer()
 
     # ---------- data
+    def _disk_state(self):
+        st = load_json(STATE_PATH, {})
+        st.setdefault("active_by", {})
+        st.setdefault("resume_by", {})
+        for k in ("active", "resume"):          # من النسخ القديمة
+            if k in st:
+                if st[k]:
+                    st[k + "_by"][USER] = st[k]
+                del st[k]
+        for k in ("used", "bonus", "nobody"):
+            st.setdefault(k, {})
+        return st
+
+    def sync_state(self):
+        """نحفظ تغييراتنا وناخذ تغييرات الحسابات الثانية (كل حساب له نسخة من البرنامج)"""
+        with file_lock():
+            disk = self._disk_state()
+            mine = self.state
+            if mine:
+                if mine.get("date") and (disk.get("date") or "") < mine["date"]:
+                    disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
+                            "active_by": disk["active_by"], "resume_by": disk["resume_by"]}
+                if disk.get("date") == mine.get("date"):
+                    base = self.base if self.base.get("date") == mine.get("date") else {}
+                    for k in ("used", "bonus", "nobody"):
+                        cur, old = mine.get(k, {}), base.get(k, {})
+                        for n in set(cur) | set(old):
+                            d = cur.get(n, 0) - old.get(n, 0)
+                            if d:
+                                disk[k][n] = disk[k].get(n, 0) + d
+                                if disk[k][n] == 0 or (k == "used" and n not in cur and abs(disk[k][n]) < 1):
+                                    disk[k].pop(n, None)
+                disk["active_by"][USER] = mine.get("active")
+                if mine.get("resume"):
+                    disk["resume_by"][USER] = mine["resume"]
+                else:
+                    disk["resume_by"].pop(USER, None)
+            if mine or disk.get("date"):
+                save_json(STATE_PATH, disk)
+        self.base = copy.deepcopy(disk)
+        st = copy.deepcopy(disk)
+        st["active"] = st["active_by"].get(USER)
+        st["resume"] = st["resume_by"].get(USER)
+        self.state = st
+
     def save_state(self):
-        save_json(STATE_PATH, self.state)
+        self.sync_state()
 
     def save_cfg(self):
         save_json(CONFIG_PATH, self.cfg)
@@ -393,8 +588,8 @@ class App:
     def ensure_today(self):
         t = self.today()
         if self.state.get("date") != t:
-            active = self.state.get("active")
-            self.state = {"date": t, "used": {}, "bonus": {}, "nobody": {}, "active": active}
+            self.state = {"date": t, "used": {}, "bonus": {}, "nobody": {},
+                          "active": self.state.get("active"), "resume": self.state.get("resume")}
             self.save_state()
             return True
         for k in ("used", "bonus", "nobody"):
@@ -498,7 +693,7 @@ class App:
         x, y, w, h = screen_geom(r)
         r.geometry(f"{w}x{h}+{x}+{y}")
 
-        lf = tk.Frame(r, bg=BG)
+        lf = self.lock_frame = tk.Frame(r, bg=BG)
         lf.place(relx=0.5, rely=0.45, anchor="center")
         tk.Label(lf, text="⏱  وقتي", font=(FONT, 42, "bold"), bg=BG, fg=FG).pack()
         self.clock_lbl = tk.Label(lf, text="", font=(FONT, 16), bg=BG, fg=MUTED)
@@ -512,6 +707,8 @@ class App:
         btn(bottom, "السجل", self.open_log, bg=CARD).pack(side="right", padx=6)
         btn(bottom, "الإعدادات", self.open_settings, bg=CARD).pack(side="right", padx=6)
         btn(bottom, "إغلاق البرنامج", self.exit_app, bg=CARD).pack(side="right", padx=6)
+        if IS_WIN:
+            btn(bottom, "تسجيل خروج من ويندوز", self.logoff, bg=CARD).pack(side="right", padx=6)
 
         tk.Label(lf, text="آخر الأحداث (الكل يشوفها)", font=(FONT, 13, "bold"), bg=BG,
                  fg=MUTED).pack(pady=(30, 6))
@@ -546,6 +743,9 @@ class App:
         self.link_lbl.configure(text="الرسائل على الجوال:  " + ntfy_url(self.cfg).replace("https://", ""))
 
     def show_lock(self):
+        if self.free:
+            self.timer.withdraw()
+            return
         self.timer.withdraw()
         self.root.deiconify()
         x, y, w, h = screen_geom(self.root)
@@ -738,6 +938,11 @@ class App:
             self.last = now
             if dt < 0 or dt > 5:      # الجهاز كان نايم (Sleep) - ما نحسب
                 dt = 0
+            if not session_active():  # الحساب مقفل أو حساب ثاني قدام الشاشة - ما نحسب
+                dt = 0
+            if self.free:
+                self.root.after(1000, self.tick)
+                return
             if self.ensure_today():
                 self.warned = False
                 self.grace_left = None
@@ -764,12 +969,15 @@ class App:
                     if self.grace_left <= 0:
                         self.lock_now()
                 self.update_timer_ui()
-                self.save_tick += 1
-                if self.save_tick >= 10:
-                    self.save_tick = 0
-                    self.save_state()
             else:
                 self.clock_lbl.configure(text=datetime.datetime.now().strftime("%H:%M"))
+            self.save_tick += 1
+            if self.save_tick >= 10:          # كل 10 ثواني نتزامن مع الحسابات الثانية
+                self.save_tick = 0
+                self.save_state()
+                if not self.active and not self.dialogs:
+                    self.cfg = load_config()
+                    self.refresh_lock()
         except Exception as ex:  # ما نبي البرنامج يطيح
             print("tick error:", ex)
         self.root.after(1000, self.tick)
@@ -781,6 +989,8 @@ class App:
                     if d.winfo_exists():
                         d.lift()
                         d.attributes("-topmost", True)
+            elif self.free:
+                pass
             elif not self.active:
                 self.root.lift()
                 self.root.attributes("-topmost", True)
@@ -844,6 +1054,7 @@ class App:
 
         s.protocol("WM_DELETE_WINDOW", close)
         tk.Label(s, text="الإعدادات", font=(FONT, 18, "bold"), bg=CARD, fg=FG).pack(anchor="e")
+        tk.Label(s, text=f"أنت الحين في حساب ويندوز: {USER}", font=(FONT, 11), bg=CARD, fg=MUTED).pack(anchor="e")
 
         # players
         tk.Label(s, text="اللاعبين", font=(FONT, 13, "bold"), bg=CARD, fg=MUTED).pack(anchor="e", pady=(12, 4))
@@ -859,7 +1070,7 @@ class App:
             lb.delete(0, "end")
             for p in self.cfg["players"]:
                 lock = "  🔒" if p.get("pin") else ""
-                lb.insert("end", f'{p["name"]} — {dur(p["daily_minutes"])} باليوم — باقي {fmt(self.remaining(p["name"]))}{lock}')
+                lb.insert("end", f'{p["name"]} — {dur(p["daily_minutes"])} باليوم — باقي {fmt(self.remaining(p["name"]))}{lock}' + (f'  [{p["windows_user"]}]' if p.get("windows_user") else ""))
 
         def selected():
             sel = lb.curselection()
@@ -870,14 +1081,16 @@ class App:
 
         def edit_player(p=None):
             v, vals = self.ask("لاعب جديد" if p is None else "تعديل لاعب",
-                               "الرمز اختياري: لو حطيت رمز، ما أحد يقدر يلعب باسمه غيره.",
+                               "الرمز اختياري: لو حطيت رمز، ما أحد يقدر يلعب باسمه غيره.\n"
+                               "حساب ويندوز اختياري: إذا دخل حسابه، يبدأ وقته على طول.",
                                [("حفظ", True), ("إلغاء", None)],
                                fields=[("الاسم", p["name"] if p else "", False),
                                        ("كم ساعة باليوم", hours_num(p["daily_minutes"]) if p else "2", False),
-                                       ("رمز اللاعب", KEEP if p and p.get("pin") else "", False)])
+                                       ("رمز اللاعب", KEEP if p and p.get("pin") else "", False),
+                                       ("حساب ويندوز حقه", p.get("windows_user", "") if p else "", False)])
             if not v:
                 return
-            name, mins, pin = vals[0].strip(), vals[1].strip(), vals[2].strip()
+            name, mins, pin, winuser = vals[0].strip(), vals[1].strip(), vals[2].strip(), vals[3].strip().lower()
             mins = parse_hours(mins)
             if not name or mins is None or mins < 0 or mins > 24 * 60:
                 self.info("خطأ", "اكتب اسم، والساعات لازم تكون رقم (مثلاً 2 أو 1.5).")
@@ -903,6 +1116,7 @@ class App:
                 p["name"], p["daily_minutes"] = name, mins
             if pin != KEEP:
                 p["pin"] = hash_pin(pin) if pin else ""
+            p["windows_user"] = winuser
             self.save_cfg()
             self.save_state()
             refresh_lb()
@@ -964,11 +1178,12 @@ class App:
                   ("nobody_awake_per_day", "كم مرة «ما أحد صاحي» باليوم لكل واحد"),
                   ("day_start_hour", "اليوم الجديد يبدأ الساعة (0-23)"),
                   ("telegram_token", "تيليجرام: توكن البوت"),
-                  ("telegram_chat_id", "تيليجرام: رقم القروب (chat id)")]
+                  ("telegram_chat_id", "تيليجرام: رقم القروب (chat id)"),
+                  ("free_accounts", "حسابات ويندوز بدون حد (افصلها بفاصلة)")]
         ents = {}
         for i, (key, label) in enumerate(fields):
             tk.Label(gf, text=label, font=(FONT, 11), bg=CARD, fg=FG).grid(row=i, column=1, sticky="e", pady=3)
-            e = tk.Entry(gf, font=(FONT, 11), width=30 if key.startswith("telegram") else 8, justify="right")
+            e = tk.Entry(gf, font=(FONT, 11), width=30 if key in TEXT_KEYS else 8, justify="right")
             e.insert(0, str(self.cfg.get(key, "")))
             e.grid(row=i, column=0, sticky="w", padx=(0, 12), pady=3)
             ents[key] = e
@@ -983,7 +1198,7 @@ class App:
             new = {}
             for key, _ in fields:
                 val = ents[key].get().strip()
-                if key.startswith("telegram"):
+                if key in TEXT_KEYS:
                     new[key] = val
                 else:
                     if not val.isdigit():
@@ -1029,6 +1244,9 @@ class App:
                     self.info("خطأ", f"ما قدرت أضبط التشغيل التلقائي:\n{ex}")
             self.save_cfg()
             visible = [k for k in changed if not k.startswith("telegram")]
+            if self.is_free_account() and not self.free:
+                self.info("حساب بدون حد", "هذا الحساب صار بدون حد. البرنامج بيصير نافذة صغيرة في شريط المهام.")
+                self.root.after(300, self.show_free)
             if visible:
                 self.log("settings", "الكبير غيّر الإعدادات: " + "، ".join(f"{k}={changed[k]}" for k in visible),
                          notify=True)
@@ -1039,6 +1257,8 @@ class App:
         btn(bb, "حفظ وإغلاق", save, bg=GOOD).pack(side="right", padx=4)
         btn(bb, "تجربة تيليجرام", test_tg, bg=BG).pack(side="right", padx=4)
         btn(bb, "رابط الإشعارات", self.show_ntfy, bg=GOOD).pack(side="right", padx=4)
+        if IS_WIN:
+            btn(bb, "تشغيل لكل الحسابات", self.autostart_all, bg=BG).pack(side="right", padx=4)
         btn(bb, "تغيير رمز الكبير", change_admin_pin, bg=BG).pack(side="right", padx=4)
         btn(bb, "إلغاء", close, bg=DIM).pack(side="left", padx=4)
 
@@ -1047,6 +1267,16 @@ class App:
         s.geometry(f"+{(sw - s.winfo_reqwidth()) // 2}+{max(0, (sh - s.winfo_reqheight()) // 4)}")
         s.lift()
         s.focus_force()
+
+    def autostart_all(self):
+        msg = "البرنامج بيشتغل تلقائياً في كل حسابات ويندوز. ويندوز بيطلب منك موافقة المسؤول."
+        if "\\users\\" in sys.executable.lower():
+            msg += ("\n\n⚠️ Python مثبت لحسابك بس، فحسابات إخوانك ما تقدر تشغله.\n"
+                    "ثبّت Python مرة ثانية واختر Customize ← Install Python for all users.")
+        v, _ = self.ask("تشغيل لكل الحسابات", msg, [("كمّل", "y"), ("إلغاء", None)])
+        if v:
+            ok = set_autostart_all()
+            self.info("تشغيل لكل الحسابات", "تم ✅ (إذا وافقت على رسالة ويندوز)" if ok else "ما تم. لازم توافق على رسالة ويندوز.")
 
     def show_ntfy(self):
         while True:
@@ -1131,7 +1361,7 @@ def main():
     _instance_lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     for _ in range(20):  # بعد التحديث ننتظر النسخة القديمة تطلع
         try:
-            _instance_lock.bind(("127.0.0.1", 47613))
+            _instance_lock.bind(("127.0.0.1", 47613 + int(hashlib.md5(USER.encode()).hexdigest(), 16) % 2000))
             break
         except OSError:
             time.sleep(0.5)
