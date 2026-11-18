@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 35
-CHANGES = ("لما يخلص وقت الكل، أي واحد يقدر يدخل ويطلب «وقت إضافي» أو «ما أحد صاحي».\n"
-           "والوقت الكامل يرجع للكل لما يبدأ اللي لعب أول.")
+VERSION = 36
+CHANGES = ("لما يخلص وقت الكل: أي واحد يدخل يبدأ دور جديد والكل يرجع له وقته، إلا آخر واحد لعب.\n"
+           "آخر واحد يقدر بعد ساعتين (تتغير من الإعدادات)، أو إذا بدأ غيره.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -103,6 +103,7 @@ DEFAULT_CONFIG = {
     "nobody_awake_minutes": 30,    # كم دقيقة يعطي خيار "ما أحد صاحي"
     "nobody_awake_per_day": 1,     # كم مرة باليوم لكل لاعب
     "day_start_hour": 4,           # اليوم الجديد يبدأ الساعة 4 الفجر
+    "last_wait_hours": 2,          # آخر واحد لعب ينتظر كم ساعة قبل ما يبدأ دور جديد
     "free_accounts": "",          # حسابات ويندوز بدون حد، مفصولة بفاصلة
     "ntfy_topic": "",             # اسم صفحة الإشعارات على ntfy.sh (ينصنع تلقائياً)
     "telegram_token": "",
@@ -804,7 +805,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -1053,10 +1054,11 @@ class App:
                 txt, color = f'{p["name"]}\nوقت مفتوح', WARN
             elif p["name"] in self.state.get("skipped", []) and not self.can_play(p["name"]):
                 txt, color = f'{p["name"]}\nخسر دوره (عقوبة)', DIM
-            elif self.round_complete() and p["name"] == self.round_opener():
+            elif self.round_complete() and self.can_open_round(p["name"]):
                 txt, color = f'{p["name"]}\nيبدأ الدور الجديد ▶', GOOD
             elif self.round_complete():
-                txt, color = f'{p["name"]}\nينتظر {self.round_opener()}', DIM
+                at = h12(datetime.datetime.now() + datetime.timedelta(seconds=self.last_wait_left(p["name"])))
+                txt, color = f'{p["name"]}\nتوك لعب · بعد {at}', DIM
             elif not self.can_play(p["name"]):
                 txt, color = f'{p["name"]}\nخلص وقته ✓', DIM
             elif rem > 0:
@@ -1072,7 +1074,7 @@ class App:
             left = [n for n in allp if n not in r]
             rt = "خلص وقتهم:  " + "، ".join(f"{n} ✓" for n in r) + "     ·     باقي:  " + "، ".join(left)
         elif self.round_complete():
-            rt = f"🏁 الكل خلص وقته · الوقت يرجع لما يبدأ {self.round_opener()}"
+            rt = f"🏁 الكل خلص وقته · أول واحد يدخل يرجّع الوقت للكل (إلا {self.last_finisher()[0]})"
         else:
             rt = "دور جديد: الكل عنده وقته كامل"
         if getattr(self, "pending_req", None):
@@ -1121,15 +1123,23 @@ class App:
             self.info("ممنوع", f"{name}، المنظم طلّعك ومنعك. ما تقدر تدخل لين يسمح لك.")
             return
         self.maybe_open_round(name)
-        if self.round_complete() and name != self.round_opener() and \
+        if self.round_complete() and not self.can_open_round(name) and \
                 self.remaining(name) <= 0 and not self.is_open(name):
-            v, _ = self.ask("خلص وقت الكل", f"{name}، خلص وقت الكل.\n"
-                                            f"الوقت الكامل يرجع للكل لما يبدأ {self.round_opener()} يلعب.\n\n"
-                                            "تبي وقت إضافي؟",
-                            [("وقت إضافي", "extra"), ("إلغاء", None)])
-            if v:
-                self.extension_flow(name, from_lock=True)
-                self.refresh_lock()
+            left = self.last_wait_left(name)
+            at = h12(datetime.datetime.now() + datetime.timedelta(seconds=left))
+            v, _ = self.ask("توك لعبت", f"{name}، توك لعبت، ما تقدر تلعب ورا بعض.\n"
+                                         f"تقدر تدخل الساعة {at} (بعد {dur(round(left / 60))})، أو لما يبدأ واحد غيرك.\n\n"
+                                         "أو اطلب موافقة الكبير:",
+                            [("موافقة الكبير", "admin"), ("إلغاء", None)])
+            if v and self.check_admin("الكبير يكتب رمزه عشان يوافق على الوقت الإضافي"):
+                m, _ = self.ask("كم تعطيه؟", f"كم وقت تعطي {name}؟",
+                                [("ربع ساعة", "15"), ("نص ساعة", "30"), ("ساعة", "60"), ("ساعتين", "120"), ("إلغاء", None)])
+                if m:
+                    self.grant(name, int(m), "admin")
+                    if self.remaining(name) > 0:
+                        self.start_session(name)
+                        return
+            self.refresh_lock()
             return
         if not self.can_play(name):
             left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
@@ -1156,28 +1166,38 @@ class App:
         allp = set(self.turn_players())
         return bool(allp) and allp <= set(self.state.get("round", []))
 
-    def round_opener(self):
-        """أول واحد خلص وقته في الدور اللي راح = هو اللي يبدأ الدور الجديد"""
-        r = self.state.get("round", [])
-        skipped = self.state.get("skipped", [])
-        allp = set(self.turn_players())
-        for n in r:
-            if n not in skipped and n in allp and n not in (self.state.get("blocked") or []):
-                return n
-        return r[0] if r else None
+    def last_finisher(self):
+        """آخر واحد خلص وقته في الدور اللي راح، ومتى خلص"""
+        fa = self.state.get("finished_at") or {}
+        r = [n for n in self.state.get("round", []) if n not in self.state.get("skipped", [])]
+        if not r:
+            return None, 0
+        n = max(r, key=lambda x: fa.get(x, 0)) if fa else r[-1]
+        return n, float(fa.get(n, 0))
+
+    def last_wait_left(self, name):
+        """كم ثانية باقي على آخر لاعب عشان يقدر يبدأ دور جديد (0 = يقدر)"""
+        last, at = self.last_finisher()
+        if name != last or not at:
+            return 0
+        return max(0, at + float(self.cfg.get("last_wait_hours", 2)) * 3600 - time.time())
+
+    def can_open_round(self, name):
+        return self.round_complete() and name in self.turn_players() and \
+            name not in (self.state.get("blocked") or []) and self.last_wait_left(name) <= 0
 
     def can_play(self, name):
-        """الدور = الوقت: اللي خلص وقته (أو عليه عقوبة) ينتظر لين يخلص وقت الكل،
-        وبعدها الدور الجديد يبدأ لما يدخل اللي لعب أول"""
+        """الدور = الوقت: اللي خلص وقته ينتظر لين يخلص وقت الكل،
+        وبعدها أي واحد يدخل يبدأ دور جديد، إلا آخر واحد لعب (لين تمر الساعات أو يبدأ غيره)"""
         if name in (self.state.get("blocked") or []):
             return False
         if self.round_complete():
-            return name == self.round_opener() or self.remaining(name) > 0 or self.is_open(name)
+            return self.can_open_round(name) or self.remaining(name) > 0 or self.is_open(name)
         return name not in self.state.get("round", [])
 
     def maybe_open_round(self, name):
-        """إذا الدور خلص وهذا اللي لعب أول: نبدأ دور جديد والكل يرجع له وقته"""
-        if not self.round_complete() or name != self.round_opener():
+        """الدور خلص: أي واحد (غير آخر واحد لعب) يبدأ دور جديد والكل يرجع له وقته"""
+        if not self.can_open_round(name):
             return
         self.state_op(self._new_round)
         self.log("round", f"🔄 {name} بدأ الدور الجديد: الكل رجع له وقته كامل", notify=True)
@@ -1189,6 +1209,7 @@ class App:
             r = st.setdefault("round", [])
             if name not in r:
                 r.append(name)
+            st.setdefault("finished_at", {})[name] = time.time()
         self.state_op(op)
 
     def unmark_finished(self, name):
@@ -1218,6 +1239,7 @@ class App:
         st["used"] = {}
         st["bonus"] = {}
         st["skipped"] = []
+        st["finished_at"] = {}
         for n, pen in (st.get("penalty") or {}).items():
             if int(pen.get("skip", 0)) > 0:
                 pen["skip"] = int(pen["skip"]) - 1
@@ -1231,12 +1253,14 @@ class App:
             return
         if any(self.state.get("active_by", {}).values()) or self.active:
             return   # أحد لسا يلعب في حساب ثاني
-        opener = self.round_opener()
+        last, _ = self.last_finisher()
         mark = "|".join(self.state.get("round", []))
         if self.state.get("round_announced") == mark:
             return
         self.state_op(lambda st: st.update({"round_announced": mark}))
-        self.log("round_done", f"🏁 الكل خلص وقته. الوقت يرجع للكل لما يبدأ {opener} يلعب", notify=True)
+        hrs = dur(int(float(self.cfg.get("last_wait_hours", 2)) * 60))
+        self.log("round_done", f"🏁 الكل خلص وقته. أول واحد يدخل يرجّع الوقت للكل"
+                               + (f" (إلا {last}: ينتظر {hrs} أو لين يبدأ غيره)" if last else ""), notify=True)
 
     def toggle_block(self, name):
         blocked = name in (self.state.get("blocked") or [])
@@ -2176,6 +2200,7 @@ class App:
                   ("warn_minutes", "تنبيه قبل نهاية الوقت (دقايق)"),
                   ("nobody_awake_per_day", "كم مرة «ما أحد صاحي» باليوم لكل واحد"),
                   ("day_start_hour", "اليوم الجديد يبدأ الساعة (0-23)"),
+                  ("last_wait_hours", "آخر واحد لعب ينتظر كم ساعة قبل الدور الجديد"),
                   ("telegram_token", "تيليجرام: توكن البوت"),
                   ("telegram_chat_id", "تيليجرام: رقم القروب (chat id)"),
                   ("free_accounts", "حسابات ويندوز بدون حد (افصلها بفاصلة)")]
