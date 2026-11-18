@@ -42,6 +42,11 @@
   .k-law .ic { background:rgba(192,132,252,.14); }
   .note { color:var(--amber); font-size:.85rem; background:rgba(251,191,36,.08); border:1px solid rgba(251,191,36,.25);
           border-radius:10px; padding:8px 12px; }
+  .adm { border-color:rgba(192,132,252,.45); }
+  .tag { display:inline-block; font-size:.75rem; color:var(--purple); border:1px solid rgba(192,132,252,.4);
+         border-radius:999px; padding:0 8px; margin-inline-end:6px; }
+  a.ok { display:inline-block; margin-top:8px; background:var(--green); color:#062b1d; font-weight:700;
+         text-decoration:none; border-radius:10px; padding:8px 18px; }
   .empty { color:var(--muted); text-align:center; padding:40px 16px; border:1px dashed var(--line); border-radius:14px; }
   footer { color:var(--muted); font-size:.8rem; text-align:center; }
 </style>
@@ -51,7 +56,7 @@
   <header>
     <div>
       <h1>⏱ وقتي</h1>
-      <div class="sub">رسائل البيت · للقراءة بس</div>
+      <div class="sub" id="sub">رسائل البيت · للقراءة بس</div>
     </div>
     <div class="live" id="live"><span class="dot" id="dot"></span><span id="livetxt">مباشر</span></div>
   </header>
@@ -70,7 +75,7 @@
 <script>
 (function () {
   var q = new URLSearchParams(location.search);
-  var topic = q.get("t"), pk = q.get("k");
+  var topic = q.get("t"), pk = q.get("k"), admin = q.get("a");
   var hidden = 0, keyP = null;
   function unhex(h) { var a = new Uint8Array(h.length / 2); for (var i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16); return a; }
   if (pk && window.crypto && crypto.subtle) {
@@ -123,7 +128,7 @@
     list.innerHTML = "";
     var note = document.getElementById("note");
     note.hidden = !hidden;
-    note.textContent = "🛡️ انخفت " + hidden + " رسالة بدون ختم البرنامج (ممكن مزورة).";
+    note.textContent = "🛡️ انخفت " + hidden + " رسالة بدون ختم البرنامج (قديمة أو مزورة).";
     if (!topic) { list.innerHTML = '<div class="empty">الرابط ناقص. افتحه من «رابط الإشعارات» في البرنامج.</div>'; return; }
     if (!shown.length) { list.innerHTML = '<div class="empty">ما فيه رسائل للحين. أول ما يصير شي بيطلع هنا.</div>'; return; }
     var lastDay = null, ul = null;
@@ -137,8 +142,22 @@
       var ic = document.createElement("div"); ic.className = "ic"; ic.textContent = icon(m.text);
       var t = document.createElement("div"); t.className = "t"; t.textContent = m.text.replace(/^(⛔|🔒|⚖️|⚠️|⏰|✅|🔄|📨)\s*/, "");
       var meta = document.createElement("div"); meta.className = "meta"; meta.textContent = hm(m.time);
+      if (m.admin) {
+        li.className += " adm";
+        var tag = document.createElement("span"); tag.className = "tag"; tag.textContent = "👑 للمنظم";
+        t.prepend(tag);
+        if (/index\.html|\/waqti\/\?/.test(m.link) && /[?&]r=/.test(m.link)) {
+          var a = document.createElement("a"); a.className = "ok"; a.href = m.link; a.textContent = "وافق ✓";
+          t.appendChild(document.createElement("br")); t.appendChild(a);
+        }
+      }
       li.appendChild(ic); li.appendChild(t); li.appendChild(meta); ul.appendChild(li);
     });
+  }
+  function addAdmin(ev) {
+    if (!ev || ev.event !== "message" || seen[ev.id]) return;
+    seen[ev.id] = 1;
+    msgs.push({ time: ev.time, text: ev.message || "", admin: true, link: ev.click || "" });
   }
   function add(ev) {
     if (!ev || ev.event !== "message" || seen[ev.id]) return Promise.resolve();
@@ -157,8 +176,18 @@
   });
   function live(on) { dot.className = on ? "dot" : "dot off"; livetxt.textContent = on ? "مباشر" : "يعيد الاتصال…"; }
 
+  if (admin) document.getElementById("sub").textContent = "👑 المنظم · رسائل البيت وطلبات الريست";
   render();
   if (!topic) { live(false); return; }
+  if (admin) {
+    var ab = "https://ntfy.sh/" + encodeURIComponent(admin);
+    fetch(ab + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(function (txt) {
+      txt.split("\n").forEach(function (l) { try { addAdmin(JSON.parse(l)); } catch (e) {} });
+      render();
+    }).catch(function () {});
+    var aes = new EventSource(ab + "/sse");
+    aes.onmessage = function (e) { try { addAdmin(JSON.parse(e.data)); render(); } catch (x) {} };
+  }
   var base = "https://ntfy.sh/" + encodeURIComponent(topic);
   fetch(base + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(function (txt) {
     var jobs = [];

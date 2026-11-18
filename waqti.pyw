@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 15
-CHANGES = ("رابط الرسائل صار موقع حقنا على GitHub، للقراءة بس، وكل رسالة عليها ختم ما يقدر أحد يزوره.\n"
-           "خذ الرابط الجديد من الإعدادات ← «رابط الإشعارات» وأرسله لإخوانك.")
+VERSION = 16
+CHANGES = ("جديد: «رابط المنظم» في الإعدادات (لك بس). تفتحه من جوالك وتشوف طلبات الريست\n"
+           "وتوافق عليها بزر، بدون تطبيق ntfy.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1790,7 +1790,7 @@ class App:
         btn(bb, "حفظ وإغلاق", save, bg=GOOD).pack(side="right", padx=4)
         btn(bb, "تجربة تيليجرام", test_tg, bg=BG).pack(side="right", padx=4)
         btn(bb, "رابط الإشعارات", self.show_ntfy, bg=GOOD).pack(side="right", padx=4)
-        btn(bb, "قناة المنظم", self.show_admin_channel, bg=GOOD).pack(side="right", padx=4)
+        btn(bb, "رابط المنظم", self.show_admin_channel, bg=GOOD).pack(side="right", padx=4)
         if IS_WIN:
             btn(bb, "تشغيل لكل الحسابات", self.autostart_all, bg=BG).pack(side="right", padx=4)
         btn(bb, "تغيير رمز الكبير", change_admin_pin, bg=BG).pack(side="right", padx=4)
@@ -1813,12 +1813,12 @@ class App:
             self.info("تشغيل لكل الحسابات", "تم ✅ (إذا وافقت على رسالة ويندوز)" if ok else "ما تم. لازم توافق على رسالة ويندوز.")
 
     def show_admin_channel(self):
-        v, _ = self.ask("قناة المنظم (لك بس)",
-                        "طلبات الريست والمحاولات الغلط توصلك أنت بس، على تطبيق ntfy في جوالك:\n"
-                        "افتح ntfy ← اضغط + ← اكتب هالاسم بالضبط ← Subscribe.\n"
-                        "لا تعطيه أحد.",
+        v, _ = self.ask("رابط المنظم (لك بس)",
+                        "افتح هالرابط من جوالك: تشوف رسائل البيت + طلبات الريست، وتوافق عليها بزر «وافق».\n"
+                        "لا تعطيه أحد. (ولو تبي إشعار يرن: تطبيق ntfy ← + ← اكتب: "
+                        f"{self.cfg['admin_topic']})",
                         [("تجربة", "test"), ("إغلاق", None)],
-                        fields=[("اسم القناة", self.cfg["admin_topic"], False)])
+                        fields=[("الرابط", msgs_link(self.cfg) + "&a=" + self.cfg["admin_topic"], False)])
         if v == "test":
             ntfy_admin_send(self.cfg, "وقتي", "رسالة تجربة للمنظم ✅")
             self.info("انرسلت", "إذا مشترك في القناة، المفروض وصلتك.")
