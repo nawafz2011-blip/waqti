@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 31
-CHANGES = "الوقت صار بنظام 12 ساعة (مثلاً 6:32 م بدل 18:32) في كل مكان."
+VERSION = 32
+CHANGES = ("جديد: زر «إخفاء» في مربع الوقت. ترجّعه بزر F1 (حتى وأنت داخل اللعبة).\n"
+           "وإذا خلص وقتك وبدأت المهلة، يرجع يطلع بروحه.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -522,6 +523,47 @@ def set_autostart_all():
     params = f'add "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v Waqti /t REG_SZ /d "{cmd}" /f'
     r = ctypes.windll.shell32.ShellExecuteW(None, "runas", "reg.exe", params, None, 0)
     return r > 32
+
+
+def start_key_hook(callback, vk=0x70):
+    """نسمع زر F1 في ويندوز كله (حتى داخل اللعبة) بدون ما نمنعه عن اللعبة"""
+    if not IS_WIN:
+        return
+    import ctypes
+    from ctypes import wintypes
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+
+    class KBD(ctypes.Structure):
+        _fields_ = [("vkCode", wintypes.DWORD), ("scanCode", wintypes.DWORD), ("flags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+    LRESULT = ctypes.c_ssize_t
+    HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+    user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+    user32.SetWindowsHookExW.restype = wintypes.HHOOK
+    user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+    user32.CallNextHookEx.restype = LRESULT
+    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+    def proc(code, wparam, lparam):
+        try:
+            if code == 0 and wparam in (0x0100, 0x0104):          # WM_KEYDOWN / WM_SYSKEYDOWN
+                if ctypes.cast(lparam, ctypes.POINTER(KBD)).contents.vkCode == vk:
+                    callback()
+        except Exception:
+            pass
+        return user32.CallNextHookEx(None, code, wparam, lparam)
+
+    def run():
+        try:
+            run.proc = HOOKPROC(proc)                                # نخليه حي
+            user32.SetWindowsHookExW(13, run.proc, kernel32.GetModuleHandleW(None), 0)   # WH_KEYBOARD_LL
+            msg = wintypes.MSG()
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
 
 
 def beep():
@@ -1551,6 +1593,7 @@ class App:
             self.close_session()
 
     def close_session(self):
+        self.timer_hidden = False
         name = self.active
         if name:
             st = getattr(self, "_session_start", None)
@@ -1672,6 +1715,10 @@ class App:
         row = tk.Frame(t, bg=CARD)
         row.pack(pady=(4, 10), padx=10)
         btn(row, "إنهاء", self.end_session_ask, bg=DIM, size=10).pack(side="right", padx=3)
+        btn(row, "إخفاء", self.hide_timer, bg=DIM, size=10).pack(side="left", padx=3)
+        self.timer_hidden = False
+        self.f1_pressed = False
+        start_key_hook(lambda: setattr(self, "f1_pressed", True))
         btn(row, "وقت إضافي", lambda: self.active and self.extension_flow(self.active),
             bg=ACCENT, size=10).pack(side="right", padx=3)
         for w in (t, self.t_name, self.t_status, self.t_time):
@@ -1685,9 +1732,23 @@ class App:
     def _drag_move(self, e):
         self.timer.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
 
+    def hide_timer(self):
+        self.timer_hidden = True
+        self.timer.withdraw()
+        self.toast("انخفى الوقت", "اضغط F1 عشان يرجع يطلع.", ACCENT)
+
+    def unhide_timer(self):
+        if self.timer_hidden and self.active:
+            self.timer_hidden = False
+            self.timer.deiconify()
+            self.timer.lift()
+
     def show_timer(self):
+        self.f1_pressed = False
         self.root.withdraw()
         self.update_timer_ui()
+        if self.timer_hidden:
+            return
         self.timer.deiconify()
         self.timer.update_idletasks()
         sw = self.root.winfo_screenwidth()
@@ -1780,6 +1841,7 @@ class App:
                     if rem <= 0:
                         g = int(self.cfg["grace_minutes"])
                         self.grace_left = g * 60
+                        self.unhide_timer()           # خلص الوقت: الوقت يرجع يطلع غصب
                         self.publish_status(force=True)
                         self.log("timeout", f"⏰ خلص وقت {name}. عنده {g} دقايق مهلة وبعدها ينقفل الجهاز",
                                  name, notify=True)
@@ -1823,8 +1885,15 @@ class App:
                 self.root.lift()
                 self.root.attributes("-topmost", True)
             else:
-                self.timer.lift()
-                self.timer.attributes("-topmost", True)
+                if self.f1_pressed:
+                    self.f1_pressed = False
+                    if self.timer_hidden:
+                        self.unhide_timer()
+                    else:
+                        self.hide_timer()
+                if not self.timer_hidden:
+                    self.timer.lift()
+                    self.timer.attributes("-topmost", True)
         except Exception:
             pass
         self.root.after(500, self.keep_on_top)
