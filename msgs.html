@@ -14,6 +14,7 @@
     --display:"Readex Pro","IBM Plex Sans Arabic",Tahoma,sans-serif; --body:"IBM Plex Sans Arabic",Tahoma,sans-serif;
   }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--body); }
   .wrap { max-width:640px; margin:0 auto; padding:20px 16px 48px; display:flex; flex-direction:column; gap:18px; }
   header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
@@ -207,7 +208,10 @@
     var ctl = document.getElementById("ctl"), ppl = document.getElementById("ppl"), ask = document.getElementById("ask");
     var askt = document.getElementById("askt"), pinI = document.getElementById("pin"), st = document.getElementById("st");
     var pending = null;
-    ctl.hidden = !people.length;
+    ctl.hidden = false;
+    if (!people.length) {
+      ppl.innerHTML = '<div class="st bad">رابطك قديم وما فيه الأسماء. خذ «رابط المنظم» من جديد من إعدادات البرنامج.</div>';
+    }
     people.forEach(function (n) {
       var r = document.createElement("div"); r.className = "pr";
       var nm = document.createElement("span"); nm.className = "n"; nm.textContent = n;
@@ -228,7 +232,8 @@
       return Array.prototype.map.call(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); }); }
     function norm(sv) { return sv.trim().replace(/[٠-٩]/g, function (d) { return d.charCodeAt(0) - 1632; }).replace(/[۰-۹]/g, function (d) { return d.charCodeAt(0) - 1776; }); }
     document.getElementById("go").onclick = function () {
-      if (!pending || !pinI.value.trim()) { st.className = "st bad"; st.textContent = "اكتب الرمز"; return; }
+      if (!pending) { st.className = "st bad"; st.textContent = "اختر اسم أول: «طلّعه» أو «اسمح له»"; return; }
+      if (!pinI.value.trim()) { st.className = "st bad"; st.textContent = "اكتب الرمز"; return; }
       var ts = String(Date.now()), id = Math.random().toString(36).slice(2, 10), cmd = pending.cmd, who = pending.who;
       var since = Math.floor(Date.now() / 1000) - 5;
       st.className = "st"; st.textContent = "يرسل...";
