@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 17
-CHANGES = ("«ربط الحسابات» صار يقبل أكثر من شخص في نفس الحساب.\n"
-           "إذا دخل حساب مشترك، تطلع أسماء أصحابه بس، وكل واحد يختار اسمه.")
+VERSION = 18
+CHANGES = ("جديد في رابط المنظم: زر «طلّعه» يطلّع اللاعب من الجهاز ويمنعه يدخل لين تضغط «اسمح له».\n"
+           "خذ رابط المنظم من جديد من الإعدادات (تغيّر).")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -564,6 +564,8 @@ class App:
             if me and self.remaining(me) > 0 and self.can_play(me):
                 self.start_session(me)          # دخل حسابه = يبدأ وقته على طول
         self.update_ready = None
+        self.cmd_queue = []
+        self.cmd_since = time.time() - 60
         self.root.after(1000, self.tick)
         self.root.after(500, self.keep_on_top)
         self.root.after(5000, self.check_update)
@@ -703,7 +705,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -899,7 +901,9 @@ class App:
         shown = [p for p in self.cfg["players"] if p["name"] in mine] if len(mine) > 1 else self.cfg["players"]
         for i, p in enumerate(shown):
             rem = self.remaining(p["name"])
-            if self.is_open(p["name"]):
+            if p["name"] in (self.state.get("blocked") or []):
+                txt, color = f'{p["name"]}\nممنوع (المنظم)', BAD
+            elif self.is_open(p["name"]):
                 txt, color = f'{p["name"]}\nوقت مفتوح', WARN
             elif p["name"] in self.state.get("skipped", []) and not self.can_play(p["name"]):
                 txt, color = f'{p["name"]}\nخسر دوره (عقوبة)', DIM
@@ -960,6 +964,9 @@ class App:
                 self.log("wrong_pin", f"⚠️ محاولة دخول على حساب {name} برمز غلط", name, admin=True)
                 self.info("خطأ", "الرمز غلط. وانكتبت المحاولة في السجل.")
                 return
+        if name in (self.state.get("blocked") or []):
+            self.info("ممنوع", f"{name}، المنظم طلّعك ومنعك. ما تقدر تدخل لين يسمح لك.")
+            return
         if not self.can_play(name):
             left = [n for n in self.turn_players() if n not in self.state.get("round", [])]
             if name in self.state.get("skipped", []):
@@ -983,6 +990,8 @@ class App:
 
     def can_play(self, name):
         """الدور = الوقت: اللي خلص وقته (أو عليه عقوبة) ينتظر لين يخلص وقت الكل"""
+        if name in (self.state.get("blocked") or []):
+            return False
         return name not in self.state.get("round", [])
 
     def mark_finished(self, name):
@@ -1037,6 +1046,25 @@ class App:
         self.log("round", "🔄 الكل لعب دوره: دور جديد، والكل رجع له وقته كامل", notify=True)
         for n in self.state.get("skipped", []):
             self.log("penalty_skip", f"⚖️ {n} خسر دوره هالمرة (عقوبة كذب)", n, notify=True)
+
+    def toggle_block(self, name):
+        blocked = name in (self.state.get("blocked") or [])
+
+        def op(st):
+            b = st.setdefault("blocked", [])
+            if blocked and name in b:
+                b.remove(name)
+            elif not blocked and name not in b:
+                b.append(name)
+        self.state_op(op)
+        if blocked:
+            self.log("allow", f"✅ المنظم سمح لـ {name} يدخل", name, notify=True)
+            self.info("تم", f"{name} يقدر يدخل الحين.")
+        else:
+            self.log("kick", f"🚫 المنظم منع {name} يدخل", name, notify=True)
+            self.info("تم", f"{name} ممنوع لين تسمح له.")
+            if self.active == name:
+                self.close_session()
 
     def punish(self, name):
         v, _ = self.ask("عقوبة كذب", f"{name} كذب في «ما أحد صاحي»؟\n\nالعقوبة:\n"
@@ -1149,6 +1177,68 @@ class App:
             finally:
                 self._polling = False
         threading.Thread(target=run, daemon=True).start()
+
+    # ---------- أوامر المنظم من الجوال (طلّعه / اسمح له)
+    def poll_cmds(self):
+        if getattr(self, "_cmd_polling", False):
+            return
+        self._cmd_polling = True
+
+        def run():
+            try:
+                for m in ntfy_poll(self.cfg["admin_topic"] + "-ok", self.cmd_since):
+                    try:
+                        d = json.loads(m)
+                    except Exception:
+                        continue
+                    if d.get("cmd") in ("kick", "allow") and d.get("id"):
+                        self.cmd_queue.append(d)
+            finally:
+                self._cmd_polling = False
+        threading.Thread(target=run, daemon=True).start()
+
+    def apply_cmd(self, d):
+        cid, cmd, who, ts = str(d.get("id")), d.get("cmd"), str(d.get("who", "")), str(d.get("ts", ""))
+        if cid in getattr(self, "_seen_cmds", set()):
+            return
+        self._seen_cmds = getattr(self, "_seen_cmds", set()) | {cid}
+        try:
+            fresh = abs(time.time() - int(ts) / 1000) < 300
+        except ValueError:
+            fresh = False
+        good = hashlib.sha256((self.cfg["admin_pin"] + f"{cmd}|{who}|{ts}").encode()).hexdigest()
+        res_topic = self.cfg["admin_topic"] + "-res-" + cid
+        if not fresh or d.get("p") != good or not self.player(who):
+            if cid not in (self.state.get("cmds_done") or []):
+                self.state_op(lambda st: st.setdefault("cmds_done", []).append(cid))
+                ntfy_admin_send(self.cfg, "وقتي", "❌ الرمز غلط أو الطلب قديم", topic=res_topic)
+            return
+        first = {}
+
+        def op(st):
+            done = st.setdefault("cmds_done", [])
+            first["yes"] = cid not in done
+            done.append(cid)
+            del done[:-50]
+            b = st.setdefault("blocked", [])
+            if cmd == "kick" and who not in b:
+                b.append(who)
+            if cmd == "allow" and who in b:
+                b.remove(who)
+        self.state_op(op)
+        if first.get("yes"):
+            if cmd == "kick":
+                self.log("kick", f"🚫 المنظم طلّع {who} من الجهاز ومنعه يدخل", who, notify=True)
+            else:
+                self.log("allow", f"✅ المنظم سمح لـ {who} يدخل", who, notify=True)
+            ntfy_admin_send(self.cfg, "وقتي", "✅ تم", topic=res_topic)
+        if cmd == "kick" and self.active == who:
+            beep()
+            self.close_session()
+            if IS_WIN and self.linked_player() == who:
+                subprocess.Popen(["shutdown", "/l", "/f"], creationflags=0x08000000)
+        elif not self.active:
+            self.refresh_lock()
 
     def do_reset(self, kind, who, how):
         if kind == "round":
@@ -1392,6 +1482,11 @@ class App:
             if getattr(self, "reset_approved", None):
                 (kind, who), self.reset_approved = self.reset_approved, None
                 self.do_reset(kind, who, "بموافقة المنظم من الجوال")
+            for cmd in self.cmd_queue[:]:
+                self.cmd_queue.remove(cmd)
+                self.apply_cmd(cmd)
+            if int(time.time()) % 5 == 0:
+                self.poll_cmds()
             if getattr(self, "pending_req", None) and int(time.time()) % 3 == 0:
                 self.poll_reset()
             if self.free:
@@ -1621,7 +1716,8 @@ class App:
         for label, cmd in (("إضافة", lambda: edit_player()),
                            ("تعديل", lambda: (lambda p: p and edit_player(p))(selected())),
                            ("حذف", del_player), ("زيادة/نقص وقت", add_time), ("تصفير اليوم", reset_day),
-                           ("عقوبة كذب", lambda: (lambda p: p and self.punish(p["name"]))(selected()))):
+                           ("عقوبة كذب", lambda: (lambda p: p and self.punish(p["name"]))(selected())),
+                           ("منع / سماح", lambda: (lambda p: p and self.toggle_block(p["name"]))(selected()))):
             btn(pbtns, label, cmd, bg=BG, size=10, width=12).pack(pady=2)
         btn(pbtns, "ربط الحسابات", lambda: link_accounts(), bg=GOOD, size=10, width=12).pack(pady=(8, 2))
         refresh_lb()
@@ -1861,7 +1957,8 @@ class App:
                         "لا تعطيه أحد. (ولو تبي إشعار يرن: تطبيق ntfy ← + ← اكتب: "
                         f"{self.cfg['admin_topic']})",
                         [("تجربة", "test"), ("إغلاق", None)],
-                        fields=[("الرابط", msgs_link(self.cfg) + "&a=" + self.cfg["admin_topic"], False)])
+                        fields=[("الرابط", msgs_link(self.cfg) + "&a=" + self.cfg["admin_topic"] + "&p="
+                                 + urllib.parse.quote(",".join(p["name"] for p in self.cfg["players"])), False)])
         if v == "test":
             ntfy_admin_send(self.cfg, "وقتي", "رسالة تجربة للمنظم ✅")
             self.info("انرسلت", "إذا مشترك في القناة، المفروض وصلتك.")

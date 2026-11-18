@@ -47,6 +47,21 @@
          border-radius:999px; padding:0 8px; margin-inline-end:6px; }
   a.ok { display:inline-block; margin-top:8px; background:var(--green); color:#062b1d; font-weight:700;
          text-decoration:none; border-radius:10px; padding:8px 18px; }
+  .ctl { background:var(--card); border:1px solid rgba(192,132,252,.45); border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:12px; }
+  .ctl-h { font-weight:700; color:var(--purple); }
+  .ppl { display:flex; flex-direction:column; gap:8px; }
+  .pr { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .pr .n { font-weight:600; }
+  .pr .acts { display:flex; gap:6px; }
+  .b { font:inherit; font-weight:700; border:0; border-radius:9px; padding:7px 12px; cursor:pointer; background:var(--line); color:var(--fg); }
+  .b.kick { background:rgba(248,113,113,.18); color:var(--red); }
+  .b.allow { background:rgba(52,211,153,.16); color:var(--green); }
+  .b.go { background:var(--green); color:#062b1d; }
+  .ask { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
+  .ask input { font-size:1.3rem; text-align:center; letter-spacing:.3em; padding:10px; border-radius:9px; border:0; }
+  .row { display:flex; gap:8px; } .row .b { flex:1; }
+  .st { min-height:1.4em; font-weight:700; text-align:center; }
+  .st.bad { color:var(--red); } .st.okc { color:var(--green); }
   .empty { color:var(--muted); text-align:center; padding:40px 16px; border:1px dashed var(--line); border-radius:14px; }
   footer { color:var(--muted); font-size:.8rem; text-align:center; }
 </style>
@@ -68,6 +83,16 @@
     <button class="chip" data-f="round" aria-pressed="false">الدور والريست</button>
   </div>
 
+  <section id="ctl" class="ctl" hidden>
+    <div class="ctl-h">👑 تحكم المنظم</div>
+    <div id="ppl" class="ppl"></div>
+    <div id="ask" class="ask" hidden>
+      <div id="askt" class="askt"></div>
+      <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="رمز الكبير">
+      <div class="row"><button id="go" class="b go" type="button">تأكيد</button><button id="cancel" class="b" type="button">إلغاء</button></div>
+      <div id="st" class="st" role="status"></div>
+    </div>
+  </section>
   <div id="note" class="note" hidden></div>
   <div id="list"></div>
   <footer>آخر 12 ساعة · السجل الكامل في البرنامج</footer>
@@ -176,7 +201,57 @@
   });
   function live(on) { dot.className = on ? "dot" : "dot off"; livetxt.textContent = on ? "مباشر" : "يعيد الاتصال…"; }
 
-  if (admin) document.getElementById("sub").textContent = "👑 المنظم · رسائل البيت وطلبات الريست";
+  if (admin) {
+    document.getElementById("sub").textContent = "👑 المنظم · رسائل البيت وطلبات الريست";
+    var people = (q.get("p") || "").split(",").filter(Boolean);
+    var ctl = document.getElementById("ctl"), ppl = document.getElementById("ppl"), ask = document.getElementById("ask");
+    var askt = document.getElementById("askt"), pinI = document.getElementById("pin"), st = document.getElementById("st");
+    var pending = null;
+    ctl.hidden = !people.length;
+    people.forEach(function (n) {
+      var r = document.createElement("div"); r.className = "pr";
+      var nm = document.createElement("span"); nm.className = "n"; nm.textContent = n;
+      var acts = document.createElement("div"); acts.className = "acts";
+      [["kick", "طلّعه 🚫"], ["allow", "اسمح له ✅"]].forEach(function (a) {
+        var b = document.createElement("button"); b.type = "button"; b.className = "b " + a[0]; b.textContent = a[1];
+        b.onclick = function () {
+          pending = { cmd: a[0], who: n }; ask.hidden = false; st.textContent = ""; st.className = "st";
+          askt.textContent = a[0] === "kick" ? ("تطلّع " + n + " من الجهاز وتمنعه يدخل؟") : ("تسمح لـ " + n + " يدخل؟");
+          pinI.value = ""; pinI.focus();
+        };
+        acts.appendChild(b);
+      });
+      r.appendChild(nm); r.appendChild(acts); ppl.appendChild(r);
+    });
+    document.getElementById("cancel").onclick = function () { ask.hidden = true; pending = null; };
+    function sha(sv) { return crypto.subtle.digest("SHA-256", new TextEncoder().encode(sv)).then(function (b) {
+      return Array.prototype.map.call(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); }); }
+    function norm(sv) { return sv.trim().replace(/[٠-٩]/g, function (d) { return d.charCodeAt(0) - 1632; }).replace(/[۰-۹]/g, function (d) { return d.charCodeAt(0) - 1776; }); }
+    document.getElementById("go").onclick = function () {
+      if (!pending || !pinI.value.trim()) { st.className = "st bad"; st.textContent = "اكتب الرمز"; return; }
+      var ts = String(Date.now()), id = Math.random().toString(36).slice(2, 10), cmd = pending.cmd, who = pending.who;
+      var since = Math.floor(Date.now() / 1000) - 5;
+      st.className = "st"; st.textContent = "يرسل...";
+      sha("waqti:" + norm(pinI.value)).then(function (h) { return sha(h + cmd + "|" + who + "|" + ts); }).then(function (p) {
+        return fetch("https://ntfy.sh/" + encodeURIComponent(admin + "-ok"), { method: "POST",
+          body: JSON.stringify({ cmd: cmd, who: who, ts: ts, id: id, p: p }) });
+      }).then(function () {
+        st.textContent = "انرسل. ننتظر الكمبيوتر...";
+        var tries = 0;
+        (function poll() {
+          tries++;
+          fetch("https://ntfy.sh/" + encodeURIComponent(admin + "-res-" + id) + "/json?poll=1&since=" + since)
+            .then(function (x) { return x.text(); }).then(function (txt) {
+              var done = null;
+              txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") done = m.message; } catch (e) {} });
+              if (done) { var ok = done.indexOf("✅") >= 0; st.className = "st " + (ok ? "okc" : "bad"); st.textContent = done; if (ok) setTimeout(function () { ask.hidden = true; }, 2500); }
+              else if (tries < 25) setTimeout(poll, 3000);
+              else { st.className = "st bad"; st.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; }
+            }).catch(function () { if (tries < 25) setTimeout(poll, 3000); });
+        })();
+      }).catch(function () { st.className = "st bad"; st.textContent = "ما انرسل. تأكد من النت."; });
+    };
+  }
   render();
   if (!topic) { live(false); return; }
   if (admin) {
