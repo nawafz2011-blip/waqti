@@ -26,7 +26,7 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 2
+VERSION = 3
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 
@@ -116,6 +116,32 @@ def fmt(sec):
     h, rem = divmod(sec, 3600)
     m, s = divmod(rem, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+def parse_hours(text):
+    """يحول الساعات المكتوبة (2 أو 1.5 أو ١٫٥) إلى دقايق. يرجع None إذا غلط."""
+    t = text.strip().translate(str.maketrans("٠١٢٣٤٥٦٧٨٩٫،,", "0123456789...")).replace("ساعة", "").replace("ساعات", "").strip()
+    try:
+        return int(round(float(t) * 60))
+    except ValueError:
+        return None
+
+
+def hours_num(minutes):
+    h = minutes / 60
+    return str(int(h)) if h == int(h) else f"{h:.2f}".rstrip("0")
+
+
+def dur(minutes):
+    """مدة بالكلام: ساعة، ساعتين، 3 ساعات، نص ساعة، ساعة و 15 دقيقة"""
+    m = abs(int(minutes))
+    h, r = divmod(m, 60)
+    hs = {0: "", 1: "ساعة", 2: "ساعتين"}.get(h, f"{h} ساعات" if h <= 10 else f"{h} ساعة")
+    if r == 0:
+        return hs
+    if not h:
+        return {30: "نص ساعة", 15: "ربع ساعة"}.get(r, f"{r} دقيقة")
+    return f"{hs} و{'نص' if r == 30 else f' {r} دقيقة'}"
 
 
 def now_hm():
@@ -535,13 +561,13 @@ class App:
         left = nb_max - nb_used
         v, _ = self.ask("وقت إضافي", f"{name} يبي وقت إضافي. كيف؟",
                         [("موافقة الكبير (بالرمز)", "admin"),
-                         (f"ما أحد صاحي ({nb_min} دقيقة)", "nobody"),
+                         (f"ما أحد صاحي ({dur(nb_min)})", "nobody"),
                          ("إلغاء", None)])
         if v == "admin":
             if not self.check_admin("الكبير يكتب رمزه عشان يوافق على الوقت الإضافي"):
                 return
-            m, _ = self.ask("كم دقيقة؟", f"كم دقيقة تعطي {name}؟",
-                            [("10", "10"), ("15", "15"), ("30", "30"), ("60", "60"), ("إلغاء", None)])
+            m, _ = self.ask("كم تعطيه؟", f"كم وقت تعطي {name}؟",
+                            [("ربع ساعة", "15"), ("نص ساعة", "30"), ("ساعة", "60"), ("ساعتين", "120"), ("إلغاء", None)])
             if not m:
                 return
             self.grant(name, int(m), "admin")
@@ -553,7 +579,7 @@ class App:
                                      "انتظر لين أحد يصحى. وانكتبت المحاولة في السجل.")
                 return
             ok, _ = self.ask("متأكد؟",
-                             f"بتاخذ {nb_min} دقيقة.\n"
+                             f"بتاخذ {dur(nb_min)}.\n"
                              "بتوصل رسالة للكل، وتنكتب في السجل باسمك والساعة.\n"
                              f"بعدها يبقى لك {left - 1} مرة اليوم.",
                              [("إيه، متأكد", "yes"), ("لا", None)])
@@ -569,11 +595,11 @@ class App:
         self.state["bonus"][name] = self.state["bonus"].get(name, 0) + minutes * 60
         if by == "nobody":
             self.state["nobody"][name] = self.state["nobody"].get(name, 0) + 1
-            text = f"⚠️ {name} أخذ {minutes} دقيقة إضافية بخيار «ما أحد صاحي»"
+            text = f"⚠️ {name} أخذ {dur(minutes)} إضافية بخيار «ما أحد صاحي»"
         elif by == "admin":
-            text = f"✅ الكبير أعطى {name} {minutes} دقيقة إضافية"
+            text = f"✅ الكبير أعطى {name} {dur(minutes)} إضافية"
         else:
-            text = f"الكبير عدّل وقت {name}: {minutes:+d} دقيقة"
+            text = f"الكبير نقّص من وقت {name} {dur(minutes)}"
         self.save_state()
         self.log("extra_" + by, text, name, notify=True)
         if self.active == name and self.remaining(name) > 0:
@@ -779,7 +805,7 @@ class App:
             lb.delete(0, "end")
             for p in self.cfg["players"]:
                 lock = "  🔒" if p.get("pin") else ""
-                lb.insert("end", f'{p["name"]} — {p["daily_minutes"]} دقيقة باليوم — باقي {fmt(self.remaining(p["name"]))}{lock}')
+                lb.insert("end", f'{p["name"]} — {dur(p["daily_minutes"])} باليوم — باقي {fmt(self.remaining(p["name"]))}{lock}')
 
         def selected():
             sel = lb.curselection()
@@ -793,21 +819,22 @@ class App:
                                "الرمز اختياري: لو حطيت رمز، ما أحد يقدر يلعب باسمه غيره.",
                                [("حفظ", True), ("إلغاء", None)],
                                fields=[("الاسم", p["name"] if p else "", False),
-                                       ("الدقايق باليوم", p["daily_minutes"] if p else 120, False),
+                                       ("كم ساعة باليوم", hours_num(p["daily_minutes"]) if p else "2", False),
                                        ("رمز اللاعب", KEEP if p and p.get("pin") else "", False)])
             if not v:
                 return
             name, mins, pin = vals[0].strip(), vals[1].strip(), vals[2].strip()
-            if not name or not mins.isdigit():
-                self.info("خطأ", "اكتب اسم، والدقايق لازم تكون رقم.")
+            mins = parse_hours(mins)
+            if not name or mins is None or mins < 0 or mins > 24 * 60:
+                self.info("خطأ", "اكتب اسم، والساعات لازم تكون رقم (مثلاً 2 أو 1.5).")
                 return
             if any(q["name"] == name and q is not p for q in self.cfg["players"]):
                 self.info("خطأ", "فيه لاعب بنفس الاسم.")
                 return
             if p is None:
-                p = {"name": name, "daily_minutes": int(mins), "pin": ""}
+                p = {"name": name, "daily_minutes": mins, "pin": ""}
                 self.cfg["players"].append(p)
-                self.log("settings", f"الكبير أضاف لاعب: {name} ({mins} دقيقة باليوم)", notify=True)
+                self.log("settings", f"الكبير أضاف لاعب: {name} ({dur(mins)} باليوم)", notify=True)
             else:
                 old = p["name"]
                 if old != name:
@@ -818,8 +845,8 @@ class App:
                         self.active = name
                         self.state["active"] = name
                 if int(mins) != int(p["daily_minutes"]) or old != name:
-                    self.log("settings", f"الكبير عدّل {old}: صار {name}، {mins} دقيقة باليوم", notify=True)
-                p["name"], p["daily_minutes"] = name, int(mins)
+                    self.log("settings", f"الكبير عدّل {old}: صار {name}، {dur(mins)} باليوم", notify=True)
+                p["name"], p["daily_minutes"] = name, mins
             if pin != KEEP:
                 p["pin"] = hash_pin(pin) if pin else ""
             self.save_cfg()
@@ -841,15 +868,17 @@ class App:
             p = selected()
             if not p:
                 return
-            v, vals = self.ask("تعديل وقت اليوم", f"كم دقيقة تضيف لـ {p['name']}؟ (حط سالب عشان تنقص، مثلاً -15)",
-                               [("تم", True), ("إلغاء", None)], fields=[("الدقايق", "15", False)])
+            v, vals = self.ask("تعديل وقت اليوم",
+                               f"كم ساعة تضيف لـ {p['name']}؟ (مثلاً 1 أو 0.5. وحط سالب عشان تنقص، مثلاً -0.5)",
+                               [("تم", True), ("إلغاء", None)], fields=[("الساعات", "1", False)])
             if not v:
                 return
-            try:
-                m = int(vals[0].strip())
-            except ValueError:
-                self.info("خطأ", "اكتب رقم.")
+            m = parse_hours(vals[0].replace("-", "")) if vals[0].strip() else None
+            if not m:
+                self.info("خطأ", "اكتب رقم، مثلاً 1 أو 0.5.")
                 return
+            if vals[0].strip().startswith("-"):
+                m = -m
             self.grant(p["name"], m, "admin" if m > 0 else "adjust")
             refresh_lb()
 
