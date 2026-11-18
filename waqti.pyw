@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 27
-CHANGES = "تصليح: قسم «🎮 الحين» في رابط المنظم صار يتحدث حتى لو الكمبيوتر على حساب الكبير."
+VERSION = 28
+CHANGES = ("تصليح: التزامن وإرسال «مين يلعب الحين» صار شغل مستقل كل 10 ثواني،\n"
+           "وأي خطأ يصير ينكتب في السجل ويوصل للمنظم عشان نعرف سببه.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -592,6 +593,7 @@ class App:
         self.cmd_queue = []
         self.cmd_since = time.time() - 60
         self.root.after(1000, self.tick)
+        self.root.after(3000, self.periodic)
         self.root.after(500, self.keep_on_top)
         self.root.after(5000, self.check_update)
         seen = self.cfg.setdefault("seen_versions", {})
@@ -1689,14 +1691,6 @@ class App:
             if getattr(self, "pending_req", None) and int(time.time()) % 3 == 0:
                 self.poll_reset()
             if self.free:
-                self.save_tick += 1
-                if self.save_tick >= 10:      # حساب الكبير: نتزامن ونرسل الحالة للمنظم بس
-                    self.save_tick = 0
-                    self.save_state()
-                    self.cfg = load_config()
-                    self.publish_roster()
-                    self.publish_status()
-                    self.check_week()
                 self.root.after(1000, self.tick)
                 return
             if self.ensure_today():
@@ -1734,19 +1728,44 @@ class App:
                 self.update_timer_ui()
             else:
                 self.clock_lbl.configure(text=datetime.datetime.now().strftime("%H:%M"))
-            self.save_tick += 1
-            if self.save_tick >= 10:          # كل 10 ثواني نتزامن مع الحسابات الثانية
-                self.save_tick = 0
-                self.save_state()
-                if not self.active and not self.dialogs:
-                    self.cfg = load_config()
-                    self.refresh_lock()
-                self.publish_roster()
-                self.publish_status()
-                self.check_week()
         except Exception as ex:  # ما نبي البرنامج يطيح
-            print("tick error:", ex)
+            self.report_error("tick", ex)
         self.root.after(1000, self.tick)
+
+    def report_error(self, where, ex):
+        """أي خطأ: ينكتب في السجل ويوصل للمنظم (مرة وحدة بالساعة لنفس الخطأ)"""
+        import traceback
+        key = f"{where}:{type(ex).__name__}:{ex}"
+        seen = getattr(self, "_errs", {})
+        if time.time() - seen.get(key, 0) < 3600:
+            return
+        seen[key] = time.time()
+        self._errs = seen
+        line = traceback.format_exc().strip().splitlines()[-3:]
+        msg = f"🐞 خطأ في البرنامج ({where}, النسخة {VERSION}): {type(ex).__name__}: {ex} | {' / '.join(x.strip() for x in line)}"
+        try:
+            self.log("error", msg[:400], admin=True)
+        except Exception:
+            pass
+
+    def periodic(self):
+        """كل 10 ثواني: نتزامن مع الحسابات الثانية ونرسل الحالة للمنظم. كل شغلة لحالها."""
+        for name, fn in (("sync", self.save_state),
+                         ("reload", self._reload_cfg),
+                         ("roster", self.publish_roster),
+                         ("status", self.publish_status),
+                         ("week", self.check_week)):
+            try:
+                fn()
+            except Exception as ex:
+                self.report_error(name, ex)
+        self.root.after(10000, self.periodic)
+
+    def _reload_cfg(self):
+        if not self.active and not self.dialogs:
+            self.cfg = load_config()
+            if not self.free:
+                self.refresh_lock()
 
     def keep_on_top(self):
         try:
