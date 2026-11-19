@@ -68,6 +68,7 @@
   .c-done { background:rgba(143,160,187,.14); color:var(--muted); }
   .c-idle { background:rgba(91,140,255,.14); color:var(--blue); }
   .nowt { color:var(--muted); font-size:.8rem; }
+  .b.out { background:rgba(251,191,36,.16); color:var(--amber); }
   .b.reset { background:rgba(91,140,255,.16); color:var(--blue); }
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
   .pr .acts { flex-wrap:wrap; justify-content:flex-end; }
@@ -250,12 +251,12 @@
       var r = document.createElement("div"); r.className = "pr";
       var nm = document.createElement("span"); nm.className = "n"; nm.textContent = n;
       var acts = document.createElement("div"); acts.className = "acts";
-      [["reset_time", "ريست وقته 🔄"], ["kick", "طلّعه 🚫"], ["allow", "اسمح له ✅"]].forEach(function (a) {
-        var b = document.createElement("button"); b.type = "button"; b.className = "b " + (a[0] === "reset_time" ? "reset" : a[0]); b.textContent = a[1];
+      [["reset_time", "ريست وقته 🔄"], ["logout", "سجّل خروجه 🚪"], ["kick", "طلّعه وامنعه 🚫"], ["allow", "اسمح له ✅"]].forEach(function (a) {
+        var b = document.createElement("button"); b.type = "button"; b.className = "b " + (a[0] === "reset_time" ? "reset" : a[0] === "logout" ? "out" : a[0]); b.textContent = a[1];
         b.onclick = function () {
           pending = { cmd: a[0], who: n }; ask.hidden = false; st.textContent = ""; st.className = "st";
           askt.textContent = { kick: "تطلّع " + n + " من الجهاز وتمنعه يدخل؟", allow: "تسمح لـ " + n + " يدخل؟",
-                               reset_time: "ترجع وقت " + n + " كامل؟" }[a[0]];
+                               reset_time: "ترجع وقت " + n + " كامل؟", logout: "تطلّع " + n + " من حسابه؟ (يقدر يرجع بعدين)" }[a[0]];
           pinI.value = ""; pinI.focus();
         };
         acts.appendChild(b);

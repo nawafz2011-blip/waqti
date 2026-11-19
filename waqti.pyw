@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 36
-CHANGES = ("لما يخلص وقت الكل: أي واحد يدخل يبدأ دور جديد والكل يرجع له وقته، إلا آخر واحد لعب.\n"
-           "آخر واحد يقدر بعد ساعتين (تتغير من الإعدادات)، أو إذا بدأ غيره.")
+VERSION = 37
+CHANGES = "جديد في رابط المنظم: «سجّل خروجه 🚪» يطلّع اللاعب من حسابه بدون ما يمنعه يرجع."
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1395,7 +1394,7 @@ class App:
             d = json.loads(m)
         except Exception:
             return
-        if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin") and d.get("id"):
+        if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout") and d.get("id"):
             self.cmd_queue.append(d)
             return
         req = getattr(self, "pending_req", None)
@@ -1508,7 +1507,7 @@ class App:
                         d = json.loads(m)
                     except Exception:
                         continue
-                    if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin") and d.get("id"):
+                    if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout") and d.get("id"):
                         self.cmd_queue.append(d)
             finally:
                 self._cmd_polling = False
@@ -1544,7 +1543,7 @@ class App:
             done.append(cid)
             del done[:-50]
             b = st.setdefault("blocked", [])
-            if cmd in ("reset_time", "reset_round", "set_pin"):
+            if cmd in ("reset_time", "reset_round", "set_pin", "logout"):
                 return
             if cmd == "kick" and who not in b:
                 b.append(who)
@@ -1555,6 +1554,18 @@ class App:
             if first.get("yes"):
                 self.log("pin_changed", "🔑 الكبير غيّر رمزه من الجوال", admin=True)
                 ntfy_admin_send(self.cfg, "وقتي", "✅ تم", topic=res_topic)
+            return
+        if cmd == "logout":
+            if first.get("yes"):
+                self.log("logout_cmd", f"🚪 المنظم سجّل خروج {who} من الجهاز", who, notify=True)
+                ntfy_admin_send(self.cfg, "وقتي", "✅ تم", topic=res_topic)
+            if self.active == who:
+                beep()
+                self.close_session()
+                if IS_WIN and self.linked_player() == who:
+                    subprocess.Popen(["shutdown", "/l", "/f"], creationflags=0x08000000)
+            elif not self.active:
+                self.refresh_lock()
             return
         if cmd in ("reset_time", "reset_round"):
             if first.get("yes"):
