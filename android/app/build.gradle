@@ -1,0 +1,20 @@
+plugins { id "com.android.application" }
+android {
+    namespace "app.waqti"
+    compileSdk 34
+    defaultConfig {
+        applicationId "app.waqti"
+        minSdk 24
+        targetSdk 34
+        versionCode((System.getenv("GITHUB_RUN_NUMBER") ?: "1") as int)
+        versionName "1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+    }
+    signingConfigs {
+        family {   // مفتاح ثابت: عشان النسخ الجديدة تتثبت فوق القديمة
+            storeFile file("../waqti.keystore"); storePassword "waqtiapp"
+            keyAlias "waqti"; keyPassword "waqtiapp"
+        }
+    }
+    buildTypes { release { minifyEnabled false; signingConfig signingConfigs.family } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}

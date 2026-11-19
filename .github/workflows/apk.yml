@@ -1,0 +1,27 @@
+name: Android APK
+on:
+  push:
+    branches: [ccr-8b9f1bcf-7vtkhv]
+    paths: ["android/**", ".github/workflows/apk.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.9" }
+      - run: gradle -p android assembleRelease --no-daemon
+      - run: cp android/app/build/outputs/apk/release/app-release.apk waqti.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk
+          target_commitish: ${{ github.sha }}
+          name: تطبيق وقتي للأندرويد
+          body: "نزّل waqti.apk وثبّته. (نسخة ${{ github.run_number }})"
+          files: waqti.apk
+          make_latest: true
