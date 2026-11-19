@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 41
-CHANGES = ("تصليح «الإشعارات ما توصل (429)»: ntfy كان يوقفنا لأن كل حساب يرسل كثير.\n"
-           "الحين: «مين يلعب» لما يصير شي + كل ساعة من حساب اللي يلعب بس، والأسماء لما تتغير بس.")
+VERSION = 42
+CHANGES = ("الإشعارات صارت على قاعدتنا الخاصة (Firebase) بدل ntfy: بدون حد للرسائل.\n"
+           "«مين يلعب» يتحدث كل دقيقة. ورابط المنظم نفسه ما تغيّر.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -218,20 +218,52 @@ def net_err(ex):
         NET["pause_until"] = time.time() + 1800
 
 
+FB_URL = "https://waqti-47a62-default-rtdb.europe-west1.firebasedatabase.app"
+
+
+def fb_key(topic):
+    """اسم المكان في قاعدة Firebase (القاعدة تقبل الأسماء الطويلة بس، عشان ما ينخمن)"""
+    return topic if len(topic) >= 20 else topic + "-pub-feed"
+
+
+def fb_path(topic):
+    """القنوات القديمة لـ ntfy ← مكانها في Firebase. ردود الأوامر كلها تحت مكان واحد"""
+    if "-res-" in topic:
+        base, rid = topic.split("-res-", 1)
+        return f"r/{fb_key(base + '-res')}/{rid}"
+    return "r/" + fb_key(topic)
+
+
+def fb_req(method, path, data=None, timeout=15):
+    body = None if data is None else json.dumps(data, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(f"{FB_URL}/{path}.json", data=body, method=method,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        txt = r.read().decode("utf-8", "ignore")
+    return json.loads(txt) if txt else None
+
+
+def fb_entry(text, title="", click="", prio=3):
+    e = {"m": text, "t": {".sv": "timestamp"}}
+    if title:
+        e["ti"] = title
+    if click:
+        e["c"] = click
+    if prio != 3:
+        e["p"] = prio
+    return e
+
+
 def ntfy_send_sync(cfg, text):
-    """الرسالة تروح لـ ntfy مختومة، وموقعنا على GitHub يعرضها"""
+    """الرسالة تروح لقاعدتنا (Firebase) مختومة، وموقعنا على GitHub يعرضها"""
     if not cfg.get("ntfy_topic"):
         return False, "ما فيه رابط"
     try:
         ts = int(time.time())
         sig = ed25519_sign(bytes.fromhex(cfg["sign_key"]), f"{ts}|{text}".encode("utf-8")).hex()
-        body = {"topic": cfg["ntfy_topic"], "message": text, "title": "وقتي", "tags": ["stopwatch"],
-                "click": f"{msgs_link(cfg)}#s={sig}&ts={ts}"}
-        req = urllib.request.Request("https://ntfy.sh/", data=json.dumps(body).encode("utf-8"), method="POST",
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            net_ok()
-            return r.status == 200, ""
+        fb_req("POST", fb_path(cfg["ntfy_topic"]), fb_entry(text, "وقتي", f"{msgs_link(cfg)}#s={sig}&ts={ts}"))
+        net_ok()
+        return True, ""
     except Exception as ex:
         net_err(ex)
         return False, str(ex)
@@ -287,17 +319,12 @@ def session_active():
 
 
 def ntfy_admin_send(cfg, title, text, click=None, topic=None):
-    """رسالة للمنظم بس (قناة خاصة فيه)"""
+    """رسالة للمنظم بس (مكان خاص فيه). ردود الأوامر تنكتب في مكانها (-res-<id>)"""
     def run():
         try:
-            body = {"topic": topic or cfg["admin_topic"], "title": title, "message": text,
-                    "priority": 4, "tags": ["stopwatch"]}
-            if click:
-                body["click"] = click
-                body["actions"] = [{"action": "view", "label": "افتح ووافق", "url": click}]
-            req = urllib.request.Request("https://ntfy.sh/", data=json.dumps(body).encode("utf-8"),
-                                         method="POST", headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=15).close()
+            t = topic or cfg["admin_topic"]
+            e = fb_entry(text, title, click or "", 4)
+            fb_req("PUT" if "-res-" in t else "POST", fb_path(t), e)
             net_ok()
         except Exception as ex:
             net_err(ex)
@@ -305,34 +332,47 @@ def ntfy_admin_send(cfg, title, text, click=None, topic=None):
 
 
 def ntfy_publish_raw(topic, body):
-    """رسالة صامتة (بدون إشعار) لقناة معينة"""
+    """قيمة وحدة تنكتب فوق القديمة (حالة اللاعبين، الأسماء)"""
     def run():
         try:
-            req = urllib.request.Request(f"https://ntfy.sh/{topic}", data=body.encode("utf-8"), method="POST",
-                                         headers={"Priority": "1"})
-            urllib.request.urlopen(req, timeout=15).close()
+            fb_req("PUT", fb_path(topic), fb_entry(body))
             net_ok()
         except Exception as ex:
             net_err(ex)
     threading.Thread(target=run, daemon=True).start()
 
 
+def fb_items(data):
+    """[(id, الرسالة, الوقت بالثواني)] من قائمة Firebase"""
+    out = []
+    for k, v in (data or {}).items() if isinstance(data, dict) else []:
+        if isinstance(v, dict) and "m" in v:
+            out.append((k, v.get("m", ""), float(v.get("t", 0)) / 1000))
+    return sorted(out, key=lambda x: x[2])
+
+
 def ntfy_poll(topic, since):
     """يرجع الرسائل اللي وصلت للقناة من وقت معين"""
     try:
-        url = f"https://ntfy.sh/{topic}/json?poll=1&since={int(since)}"
-        with urllib.request.urlopen(url, timeout=15) as r:
-            out = []
-            for line in r.read().decode("utf-8", "ignore").splitlines():
-                try:
-                    m = json.loads(line)
-                    if m.get("event") == "message":
-                        out.append(m.get("message", ""))
-                except Exception:
-                    pass
-            return out
+        return [m for _, m, t in fb_items(fb_req("GET", fb_path(topic))) if t >= since - 5]
     except Exception:
         return []
+
+
+def fb_cleanup(cfg):
+    """نمسح القديم عشان القاعدة تبقى صغيرة: الأوامر والردود بعد يوم، والرسائل بعد 3 أيام"""
+    now = time.time()
+    for topic, keep in ((cfg["admin_topic"] + "-ok", 86400), (cfg["admin_topic"] + "-res-x", 86400),
+                        (cfg["admin_topic"], 3 * 86400), (cfg.get("ntfy_topic", ""), 3 * 86400)):
+        if not topic:
+            continue
+        path = fb_path(topic).rsplit("/", 1)[0] if "-res-" in topic else fb_path(topic)
+        try:
+            old = {k: None for k, _, t in fb_items(fb_req("GET", path)) if t < now - keep}
+            if old:
+                fb_req("PATCH", path, old)
+        except Exception:
+            pass
 
 
 def load_config():
@@ -824,7 +864,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_sent") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_fb") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -1393,30 +1433,46 @@ class App:
         self.refresh_lock()
 
     def start_stream(self):
-        """اتصال واحد مفتوح مع ntfy: أوامر الجوال وموافقات الريست توصل منه على طول
-        (بدل ما نسأل كل كم ثانية ونتعدى حد ntfy المجاني)"""
+        """اتصال واحد مفتوح مع قاعدتنا: أوامر الجوال وموافقات الريست توصل منه على طول"""
         def run():
-            since = int(time.time()) - 12 * 3600      # الأوامر اللي انرسلت والبرنامج مسكّر (ntfy يحفظها 12 ساعة)
+            seen = set()
             wait = 3
+            path = fb_path(self.cfg["admin_topic"] + "-ok")
             while True:
                 try:
-                    url = f"https://ntfy.sh/{self.cfg['admin_topic']}-ok/json?since={since}"
-                    with urllib.request.urlopen(url, timeout=120) as r:
+                    req = urllib.request.Request(f"{FB_URL}/{path}.json", headers={"Accept": "text/event-stream"})
+                    with urllib.request.urlopen(req, timeout=120) as r:
+                        event = ""
                         for raw in r:
+                            line = raw.decode("utf-8", "ignore").strip()
+                            if line.startswith("event:"):
+                                event = line[6:].strip()
+                                continue
+                            if not line.startswith("data:") or event not in ("put", "patch"):
+                                continue
+                            wait = 3                       # الاتصال شغال
                             try:
-                                ev = json.loads(raw.decode("utf-8", "ignore"))
+                                d = json.loads(line[5:])
                             except Exception:
                                 continue
-                            if ev.get("time"):
-                                since = max(since, int(ev["time"]))
-                            wait = 3                       # الاتصال شغال
-                            if ev.get("event") == "message":
-                                self.handle_ok_message(ev.get("message", ""))
+                            p, v = d.get("path", "/"), d.get("data")
+                            items = (v if isinstance(v, dict) else {}) if p == "/" else {p.strip("/").split("/")[0]: v}
+                            for k, m, t in fb_items(items):
+                                if k in seen or t < time.time() - 12 * 3600:
+                                    continue          # الأوامر الأقدم من 12 ساعة ما تتنفذ
+                                seen.add(k)
+                                self.handle_ok_message(m)
                 except Exception:
                     pass
                 time.sleep(wait)                           # يرجع يتصل خلال ثواني، ويبطّئ لو تكرر الفشل
                 wait = min(wait * 2, 60)
         threading.Thread(target=run, daemon=True).start()
+
+        def clean():
+            while True:
+                fb_cleanup(self.cfg)
+                time.sleep(3600)
+        threading.Thread(target=clean, daemon=True).start()
 
     def fast_cmds(self):
         """أوامر الجوال تتنفذ أول ما توصل (كل خُمس ثانية نشيك)"""
@@ -1486,8 +1542,8 @@ class App:
         last = getattr(self, "_status_sent", 0)
         if time.time() < NET["pause_until"]:
             return                             # ntfy موقفنا: ما نرسل الإضافي
-        if not force and (not self.active or time.time() - last < 3600):
-            return                             # التحديث الدوري: كل ساعة ومن حساب اللي يلعب بس
+        if not force and (not self.active or time.time() - last < 60):
+            return                             # التحديث الدوري: كل دقيقة ومن حساب اللي يلعب بس
         if force and time.time() - last < 2:      # أحداث ورا بعض: نرسل وحدة بعد 3 ثواني
             if not getattr(self, "_status_pending", False):
                 self._status_pending = True
@@ -1534,10 +1590,10 @@ class App:
         names = [p["name"] for p in self.cfg["players"]]
         if time.time() < NET["pause_until"]:
             return
-        sent = self.state.get("roster_sent") or {}
+        sent = self.state.get("roster_fb") or {}
         if not force and sent.get("names") == names and time.time() - float(sent.get("at", 0)) < 10 * 3600:
             return                             # نفس الأسماء: ما نرسلها مرة ثانية (ntfy يحفظها 12 ساعة)
-        self.state_op(lambda st: st.update({"roster_sent": {"names": names, "at": time.time()}}))
+        self.state_op(lambda st: st.update({"roster_fb": {"names": names, "at": time.time()}}))
         ntfy_publish_raw(self.cfg["admin_topic"] + "-roster", json.dumps({"roster": names}, ensure_ascii=False))
 
     # ---------- أوامر المنظم من الجوال (طلّعه / اسمح له)
@@ -2408,8 +2464,7 @@ class App:
     def show_admin_channel(self):
         v, _ = self.ask("رابط المنظم (لك بس)",
                         "افتح هالرابط من جوالك: تشوف رسائل البيت + طلبات الريست، وتوافق عليها بزر «وافق».\n"
-                        "لا تعطيه أحد. (ولو تبي إشعار يرن: تطبيق ntfy ← + ← اكتب: "
-                        f"{self.cfg['admin_topic']})",
+                        "لا تعطيه أحد. (ولو تبي إشعار يرن: ثبّت تطبيق «وقتي» للأندرويد وحط فيه هالرابط)",
                         [("تجربة", "test"), ("إغلاق", None)],
                         fields=[("الرابط", msgs_link(self.cfg) + "&a=" + self.cfg["admin_topic"], False)])
         if v == "test":
@@ -2420,8 +2475,7 @@ class App:
         while True:
             v, _ = self.ask("رابط الإشعارات",
                             "انسخ الرابط وأرسله لإخوانك. يفتحونه من الجوال ويشوفون الرسائل، بدون حساب، وللقراءة بس.\n"
-                            "واللي يبي إشعار يرن: يثبت تطبيق ntfy، ويضغط +، ويكتب:\n"
-                            f"{self.cfg['ntfy_topic']}",
+                            "واللي يبي إشعار يرن: يثبت تطبيق «وقتي» للأندرويد ويحط فيه الرابط.",
                             [("تجربة", "test"), ("رابط جديد", "new"), ("إغلاق", None)],
                             fields=[("الرابط", msgs_link(self.cfg), False)])
             if v == "test":

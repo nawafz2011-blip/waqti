@@ -130,26 +130,38 @@
 <script>
 (function () {
 
-  // ننتظر رد الكمبيوتر على اتصال مفتوح (يوصل على طول)، ومعه فحص احتياطي كل 4 ثواني
+  // قاعدتنا (Firebase): نفس شكل رسائل ntfy القديم عشان باقي الصفحة ما يتغير
+  var FB = "https://waqti-47a62-default-rtdb.europe-west1.firebasedatabase.app/r/";
+  function fk(t) { return t.length >= 20 ? t : t + "-pub-feed"; }
+  function fbPath(t) { var i = t.indexOf("-res-"); return i >= 0 ? fk(t.slice(0, i) + "-res") + "/" + t.slice(i + 5) : fk(t); }
+  function fbEv(id, v) { return v && typeof v === "object" && "m" in v ? { event: "message", id: id, time: Math.floor((v.t || 0) / 1000), message: v.m, click: v.c || "", title: v.ti || "" } : null; }
+  function fbPush(t, obj) { return fetch(FB + fbPath(t) + ".json", { method: "POST", body: JSON.stringify({ m: JSON.stringify(obj), t: { ".sv": "timestamp" } }) })
+    .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r; }); }
+  // قائمة رسائل: كل رسالة (قديمة وجديدة) توصل لـ onEv
+  function fbList(t, onEv, onOpen, onErr) {
+    var es = new EventSource(FB + fbPath(t) + ".json");
+    function h(e) { try { var d = JSON.parse(e.data); if (!d) return; var v = d.data, p = d.path, out = [];
+      if (p === "/") { if (v && typeof v === "object") Object.keys(v).forEach(function (k) { out.push(fbEv(k, v[k])); }); }
+      else { var k = p.split("/")[1]; if (p.split("/").length === 2) out.push(fbEv(k, v)); }
+      out.forEach(function (ev) { if (ev && ev.time > Date.now() / 1000 - 12 * 3600) onEv(ev); }); } catch (x) {} }
+    es.addEventListener("put", h); es.addEventListener("patch", h);
+    if (onOpen) es.onopen = onOpen; if (onErr) es.onerror = onErr;
+    return es;
+  }
+  // قيمة وحدة (مين يلعب، الأسماء، رد الكمبيوتر)
+  function fbValue(t, onVal) {
+    var es = new EventSource(FB + fbPath(t) + ".json"), cur = null;
+    function h(e) { try { var d = JSON.parse(e.data); if (!d) return; var p = d.path, v = d.data;
+      if (p === "/") cur = e.type === "patch" ? Object.assign(cur || {}, v) : v;
+      else { cur = cur || {}; cur[p.split("/")[1]] = v; }
+      if (cur && "m" in cur) onVal(fbEv("v", cur)); } catch (x) {} }
+    es.addEventListener("put", h); es.addEventListener("patch", h);
+    return es;
+  }
+  // ننتظر رد الكمبيوتر (يوصل على طول). بعد 20 ثانية بدون رد: الأمر محفوظ ويتنفذ أول ما يشتغل البرنامج
   function waitRes(topic, since, onDone, onTimeout) {
-    var finished = false, es = null, tries = 0;
-    function done(msg) { if (finished) return; finished = true; try { es && es.close(); } catch (e) {} onDone(msg); }
-    try {
-      es = new EventSource("https://ntfy.sh/" + encodeURIComponent(topic) + "/sse?since=" + since);
-      es.onmessage = function (e) { try { var m = JSON.parse(e.data); if (m.event === "message" || m.message) done(m.message); } catch (x) {} };
-    } catch (e) {}
-    (function poll() {
-      if (finished) return;
-      tries++;
-      fetch("https://ntfy.sh/" + encodeURIComponent(topic) + "/json?poll=1&since=" + since)
-        .then(function (x) { return x.text(); }).then(function (txt) {
-          var got = null;
-          txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") got = m.message; } catch (e) {} });
-          if (got) done(got);
-          else if (tries < 5) setTimeout(poll, 4000);
-          else if (!finished) { finished = true; try { es && es.close(); } catch (e) {} onTimeout(); }
-        }).catch(function () { if (tries < 5) setTimeout(poll, 4000); });
-    })();
+    var finished = false, es = fbValue(topic, function (ev) { if (!finished) { finished = true; es.close(); onDone(ev.message); } });
+    setTimeout(function () { if (!finished) { finished = true; es.close(); onTimeout(); } }, 20000);
   }
   var q = new URLSearchParams(location.search);
   var topic = q.get("t"), pk = q.get("k"), admin = q.get("a");
@@ -315,14 +327,8 @@
       var ago = Math.max(0, Math.round((Date.now() / 1000 - lastStatus.ts) / 60));
       nowt.textContent = ago < 2 ? "تحدّث الحين" : ("آخر تحديث قبل " + ago + " دقيقة" + (ago > 75 ? " · الكمبيوتر يمكن مطفي" : ""));
     }
-    function gotStatus(txt) {
-      txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") { var d = JSON.parse(m.message);
-        if (d.players && (!lastStatus || d.ts >= lastStatus.ts)) lastStatus = d; } } catch (e) {} });
-      drawNow();
-    }
-    var stt = "https://ntfy.sh/" + encodeURIComponent(admin + "-status");
-    fetch(stt + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(gotStatus).catch(function () {});
-    try { var ses = new EventSource(stt + "/sse"); ses.onmessage = function (e) { gotStatus(e.data); }; } catch (e) {}
+    fbValue(admin + "-status", function (ev) { try { var d = JSON.parse(ev.message);
+      if (d.players && (!lastStatus || d.ts >= lastStatus.ts)) lastStatus = d; drawNow(); } catch (e) {} });
     setInterval(drawNow, 15000);
     nowS.hidden = false;
     nowl.innerHTML = '<div class="nowt">ننتظر أول تحديث من الكمبيوتر… (يوصل خلال دقيقة لو البرنامج شغال ونسخته 27 أو أكثر)</div>';
@@ -330,14 +336,8 @@
     try { saved = JSON.parse(localStorage.getItem(rkey) || "[]"); } catch (e) {}
     var fromLink = (q.get("p") || "").split(",").filter(Boolean);
     showPeople(saved.length ? saved : fromLink);
-    function gotRoster(txt) {
-      var last = null;
-      txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") last = JSON.parse(m.message).roster; } catch (e) {} });
-      if (last && last.length) { try { localStorage.setItem(rkey, JSON.stringify(last)); } catch (e) {} showPeople(last); }
-    }
-    var rt = "https://ntfy.sh/" + encodeURIComponent(admin + "-roster");
-    fetch(rt + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(gotRoster).catch(function () {});
-    try { var res = new EventSource(rt + "/sse"); res.onmessage = function (e) { gotRoster(JSON.stringify(JSON.parse(e.data))); }; } catch (e) {}
+    fbValue(admin + "-roster", function (ev) { try { var last = JSON.parse(ev.message).roster;
+      if (last && last.length) { try { localStorage.setItem(rkey, JSON.stringify(last)); } catch (e) {} showPeople(last); } } catch (e) {} });
     var pinbox = document.getElementById("pinbox"), pst = document.getElementById("pst");
     document.getElementById("pinbtn").onclick = function () { pinbox.hidden = false; ask.hidden = true; pst.textContent = "";
       ["oldpin", "newpin", "newpin2"].forEach(function (i) { document.getElementById(i).value = ""; }); document.getElementById("oldpin").focus(); };
@@ -350,8 +350,7 @@
       pst.className = "st"; pst.textContent = "يرسل...";
       Promise.all([sha("waqti:" + norm(o)), sha("waqti:" + norm(n1))]).then(function (hs) {
         return sha(hs[0] + "set_pin|" + hs[1] + "|" + ts).then(function (p) {
-          return fetch("https://ntfy.sh/" + encodeURIComponent(admin + "-ok"), { method: "POST",
-            body: JSON.stringify({ cmd: "set_pin", who: hs[1], ts: ts, id: id, p: p }) });
+          return fbPush(admin + "-ok", { cmd: "set_pin", who: hs[1], ts: ts, id: id, p: p });
         });
       }).then(function () {
         pst.textContent = "انرسل. ننتظر الكمبيوتر...";
@@ -372,8 +371,7 @@
       var since = Math.floor(Date.now() / 1000) - 5;
       st.className = "st"; st.textContent = "يرسل...";
       sha("waqti:" + norm(pinI.value)).then(function (h) { return sha(h + cmd + "|" + who + "|" + ts); }).then(function (p) {
-        return fetch("https://ntfy.sh/" + encodeURIComponent(admin + "-ok"), { method: "POST",
-          body: JSON.stringify({ cmd: cmd, who: who, ts: ts, id: id, p: p }) });
+        return fbPush(admin + "-ok", { cmd: cmd, who: who, ts: ts, id: id, p: p });
       }).then(function () {
         st.textContent = "انرسل. ننتظر الكمبيوتر...";
         waitRes(admin + "-res-" + id, since, function (done) {
@@ -385,28 +383,10 @@
   }
   render();
   if (!topic) { live(false); return; }
-  if (admin) {
-    var ab = "https://ntfy.sh/" + encodeURIComponent(admin);
-    fetch(ab + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(function (txt) {
-      txt.split("\n").forEach(function (l) { try { addAdmin(JSON.parse(l)); } catch (e) {} });
-      render();
-    }).catch(function () {});
-    var aes = new EventSource(ab + "/sse");
-    aes.onmessage = function (e) { try { addAdmin(JSON.parse(e.data)); render(); } catch (x) {} };
-  }
-  var base = "https://ntfy.sh/" + encodeURIComponent(topic);
-  fetch(base + "/json?poll=1&since=12h").then(function (r) { return r.text(); }).then(function (txt) {
-    var jobs = [];
-    txt.split("\n").forEach(function (l) { try { jobs.push(add(JSON.parse(l))); } catch (e) {} });
-    return Promise.all(jobs).then(render);
-  }).catch(function () {});
-  function connect() {
-    var es = new EventSource(base + "/sse");
-    es.onopen = function () { live(true); };
-    es.onmessage = function (e) { try { add(JSON.parse(e.data)).then(render); } catch (x) {} };
-    es.onerror = function () { live(false); };
-  }
-  connect();
+  var redraw = null;
+  function later() { clearTimeout(redraw); redraw = setTimeout(render, 150); }
+  if (admin) fbList(admin, function (ev) { addAdmin(ev); later(); });
+  fbList(topic, function (ev) { add(ev).then(later); }, function () { live(true); }, function () { live(false); });
 })();
 </script>
 </body>

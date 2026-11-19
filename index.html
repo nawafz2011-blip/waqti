@@ -31,26 +31,38 @@
 <script>
 (function () {
 
-  // ننتظر رد الكمبيوتر على اتصال مفتوح (يوصل على طول)، ومعه فحص احتياطي كل 4 ثواني
+  // قاعدتنا (Firebase): نفس شكل رسائل ntfy القديم عشان باقي الصفحة ما يتغير
+  var FB = "https://waqti-47a62-default-rtdb.europe-west1.firebasedatabase.app/r/";
+  function fk(t) { return t.length >= 20 ? t : t + "-pub-feed"; }
+  function fbPath(t) { var i = t.indexOf("-res-"); return i >= 0 ? fk(t.slice(0, i) + "-res") + "/" + t.slice(i + 5) : fk(t); }
+  function fbEv(id, v) { return v && typeof v === "object" && "m" in v ? { event: "message", id: id, time: Math.floor((v.t || 0) / 1000), message: v.m, click: v.c || "", title: v.ti || "" } : null; }
+  function fbPush(t, obj) { return fetch(FB + fbPath(t) + ".json", { method: "POST", body: JSON.stringify({ m: JSON.stringify(obj), t: { ".sv": "timestamp" } }) })
+    .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r; }); }
+  // قائمة رسائل: كل رسالة (قديمة وجديدة) توصل لـ onEv
+  function fbList(t, onEv, onOpen, onErr) {
+    var es = new EventSource(FB + fbPath(t) + ".json");
+    function h(e) { try { var d = JSON.parse(e.data); if (!d) return; var v = d.data, p = d.path, out = [];
+      if (p === "/") { if (v && typeof v === "object") Object.keys(v).forEach(function (k) { out.push(fbEv(k, v[k])); }); }
+      else { var k = p.split("/")[1]; if (p.split("/").length === 2) out.push(fbEv(k, v)); }
+      out.forEach(function (ev) { if (ev && ev.time > Date.now() / 1000 - 12 * 3600) onEv(ev); }); } catch (x) {} }
+    es.addEventListener("put", h); es.addEventListener("patch", h);
+    if (onOpen) es.onopen = onOpen; if (onErr) es.onerror = onErr;
+    return es;
+  }
+  // قيمة وحدة (مين يلعب، الأسماء، رد الكمبيوتر)
+  function fbValue(t, onVal) {
+    var es = new EventSource(FB + fbPath(t) + ".json"), cur = null;
+    function h(e) { try { var d = JSON.parse(e.data); if (!d) return; var p = d.path, v = d.data;
+      if (p === "/") cur = e.type === "patch" ? Object.assign(cur || {}, v) : v;
+      else { cur = cur || {}; cur[p.split("/")[1]] = v; }
+      if (cur && "m" in cur) onVal(fbEv("v", cur)); } catch (x) {} }
+    es.addEventListener("put", h); es.addEventListener("patch", h);
+    return es;
+  }
+  // ننتظر رد الكمبيوتر (يوصل على طول). بعد 20 ثانية بدون رد: الأمر محفوظ ويتنفذ أول ما يشتغل البرنامج
   function waitRes(topic, since, onDone, onTimeout) {
-    var finished = false, es = null, tries = 0;
-    function done(msg) { if (finished) return; finished = true; try { es && es.close(); } catch (e) {} onDone(msg); }
-    try {
-      es = new EventSource("https://ntfy.sh/" + encodeURIComponent(topic) + "/sse?since=" + since);
-      es.onmessage = function (e) { try { var m = JSON.parse(e.data); if (m.event === "message" || m.message) done(m.message); } catch (x) {} };
-    } catch (e) {}
-    (function poll() {
-      if (finished) return;
-      tries++;
-      fetch("https://ntfy.sh/" + encodeURIComponent(topic) + "/json?poll=1&since=" + since)
-        .then(function (x) { return x.text(); }).then(function (txt) {
-          var got = null;
-          txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") got = m.message; } catch (e) {} });
-          if (got) done(got);
-          else if (tries < 5) setTimeout(poll, 4000);
-          else if (!finished) { finished = true; try { es && es.close(); } catch (e) {} onTimeout(); }
-        }).catch(function () { if (tries < 5) setTimeout(poll, 4000); });
-    })();
+    var finished = false, es = fbValue(topic, function (ev) { if (!finished) { finished = true; es.close(); onDone(ev.message); } });
+    setTimeout(function () { if (!finished) { finished = true; es.close(); onTimeout(); } }, 20000);
   }
   var q = new URLSearchParams(location.search);
   var t = q.get("t"), r = q.get("r"), n = q.get("n"), w = q.get("w") || "أحد";
@@ -70,7 +82,7 @@
     go.disabled = true; st.className = ""; st.textContent = "يرسل...";
     var since = Math.floor(Date.now() / 1000) - 5;
     sha("waqti:" + norm(pin.value)).then(function (h) { return sha(h + n); }).then(function (p) {
-      return fetch("https://ntfy.sh/" + encodeURIComponent(t), { method: "POST", body: JSON.stringify({ r: r, p: p }) });
+      return fbPush(t, { r: r, p: p });
     }).then(function () {
       st.textContent = "انرسل. ننتظر الكمبيوتر...";
       waitRes(t.replace(/-ok$/, "") + "-res-" + r, since, function (done) {
