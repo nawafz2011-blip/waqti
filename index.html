@@ -47,9 +47,9 @@
           var got = null;
           txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") got = m.message; } catch (e) {} });
           if (got) done(got);
-          else if (tries < 20) setTimeout(poll, 4000);
+          else if (tries < 5) setTimeout(poll, 4000);
           else if (!finished) { finished = true; try { es && es.close(); } catch (e) {} onTimeout(); }
-        }).catch(function () { if (tries < 20) setTimeout(poll, 4000); });
+        }).catch(function () { if (tries < 5) setTimeout(poll, 4000); });
     })();
   }
   var q = new URLSearchParams(location.search);

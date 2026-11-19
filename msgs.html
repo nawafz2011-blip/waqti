@@ -146,9 +146,9 @@
           var got = null;
           txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") got = m.message; } catch (e) {} });
           if (got) done(got);
-          else if (tries < 20) setTimeout(poll, 4000);
+          else if (tries < 5) setTimeout(poll, 4000);
           else if (!finished) { finished = true; try { es && es.close(); } catch (e) {} onTimeout(); }
-        }).catch(function () { if (tries < 20) setTimeout(poll, 4000); });
+        }).catch(function () { if (tries < 5) setTimeout(poll, 4000); });
     })();
   }
   var q = new URLSearchParams(location.search);
@@ -358,7 +358,7 @@
         waitRes(admin + "-res-" + id, since, function (done) {
           var ok = done.indexOf("✅") >= 0; pst.className = "st " + (ok ? "okc" : "bad"); pst.textContent = ok ? "✅ تغيّر الرمز" : done;
           if (ok) setTimeout(function () { pinbox.hidden = true; }, 2500);
-        }, function () { pst.className = "st bad"; pst.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; });
+        }, function () { pst.className = "st okc"; pst.textContent = "انحفظ ✅ بيتنفذ أول ما يشتغل البرنامج (خلال 12 ساعة)"; });
       }).catch(function () { pst.className = "st bad"; pst.textContent = "ما انرسل. تأكد من النت."; });
     };
     document.getElementById("cancel").onclick = function () { ask.hidden = true; pending = null; };
@@ -379,7 +379,7 @@
         waitRes(admin + "-res-" + id, since, function (done) {
           var ok = done.indexOf("✅") >= 0; st.className = "st " + (ok ? "okc" : "bad"); st.textContent = done;
           if (ok) setTimeout(function () { ask.hidden = true; }, 2500);
-        }, function () { st.className = "st bad"; st.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; });
+        }, function () { st.className = "st okc"; st.textContent = "انحفظ ✅ بيتنفذ أول ما يشتغل البرنامج (خلال 12 ساعة)"; });
       }).catch(function () { st.className = "st bad"; st.textContent = "ما انرسل. تأكد من النت."; });
     };
   }

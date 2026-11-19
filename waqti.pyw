@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 38
-CHANGES = "أسرع بين الجوال والكمبيوتر: الأوامر تتنفذ أول ما توصل، والاتصال يرجع خلال ثواني لو انقطع."
+VERSION = 39
+CHANGES = ("أوامر الجوال (ريست، طلّعه، اسمح له…) تشتغل حتى لو البرنامج مسكّر:\n"
+           "تنحفظ وتتنفذ أول ما يشتغل البرنامج (خلال 12 ساعة).")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1371,7 +1372,7 @@ class App:
         """اتصال واحد مفتوح مع ntfy: أوامر الجوال وموافقات الريست توصل منه على طول
         (بدل ما نسأل كل كم ثانية ونتعدى حد ntfy المجاني)"""
         def run():
-            since = int(time.time()) - 60
+            since = int(time.time()) - 12 * 3600      # الأوامر اللي انرسلت والبرنامج مسكّر (ntfy يحفظها 12 ساعة)
             wait = 3
             while True:
                 try:
@@ -1537,7 +1538,7 @@ class App:
             return
         self._seen_cmds = getattr(self, "_seen_cmds", set()) | {cid}
         try:
-            fresh = abs(time.time() - int(ts) / 1000) < 300
+            fresh = -300 < time.time() - int(ts) / 1000 < 12 * 3600
         except ValueError:
             fresh = False
         good = hashlib.sha256((self.cfg["admin_pin"] + f"{cmd}|{who}|{ts}").encode()).hexdigest()
@@ -1546,7 +1547,11 @@ class App:
                         or self.player(who))
         if not fresh or d.get("p") != good or not valid_target:
             if cid not in (self.state.get("cmds_done") or []):
-                self.state_op(lambda st: st.setdefault("cmds_done", []).append(cid))
+                def op_bad(st):
+                    done = st.setdefault("cmds_done", [])
+                    done.append(cid)
+                    del done[:-500]
+                self.state_op(op_bad)
                 ntfy_admin_send(self.cfg, "وقتي", "❌ الرمز غلط أو الطلب قديم", topic=res_topic)
             return
         if cmd == "set_pin":               # كل نسخة شغالة تحدّث الرمز عندها (عشان ما ترجعه القديم)
@@ -1558,7 +1563,7 @@ class App:
             done = st.setdefault("cmds_done", [])
             first["yes"] = cid not in done
             done.append(cid)
-            del done[:-50]
+            del done[:-500]
             b = st.setdefault("blocked", [])
             if cmd in ("reset_time", "reset_round", "set_pin", "logout"):
                 return
