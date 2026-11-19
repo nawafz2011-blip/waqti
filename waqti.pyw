@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 37
-CHANGES = "جديد في رابط المنظم: «سجّل خروجه 🚪» يطلّع اللاعب من حسابه بدون ما يمنعه يرجع."
+VERSION = 38
+CHANGES = "أسرع بين الجوال والكمبيوتر: الأوامر تتنفذ أول ما توصل، والاتصال يرجع خلال ثواني لو انقطع."
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -646,6 +646,7 @@ class App:
         self.root.after(500, self.keep_on_top)
         self.root.after(5000, self.check_update)
         self.start_stream()
+        self.root.after(200, self.fast_cmds)
         seen = self.cfg.setdefault("seen_versions", {})
         if seen.get(USER) != VERSION:
             first = USER not in seen
@@ -1371,6 +1372,7 @@ class App:
         (بدل ما نسأل كل كم ثانية ونتعدى حد ntfy المجاني)"""
         def run():
             since = int(time.time()) - 60
+            wait = 3
             while True:
                 try:
                     url = f"https://ntfy.sh/{self.cfg['admin_topic']}-ok/json?since={since}"
@@ -1382,12 +1384,27 @@ class App:
                                 continue
                             if ev.get("time"):
                                 since = max(since, int(ev["time"]))
+                            wait = 3                       # الاتصال شغال
                             if ev.get("event") == "message":
                                 self.handle_ok_message(ev.get("message", ""))
                 except Exception:
                     pass
-                time.sleep(30)
+                time.sleep(wait)                           # يرجع يتصل خلال ثواني، ويبطّئ لو تكرر الفشل
+                wait = min(wait * 2, 60)
         threading.Thread(target=run, daemon=True).start()
+
+    def fast_cmds(self):
+        """أوامر الجوال تتنفذ أول ما توصل (كل خُمس ثانية نشيك)"""
+        try:
+            if getattr(self, "reset_approved", None):
+                (kind, who), self.reset_approved = self.reset_approved, None
+                self.do_reset(kind, who, "بموافقة المنظم من الجوال")
+            for cmd in self.cmd_queue[:]:
+                self.cmd_queue.remove(cmd)
+                self.apply_cmd(cmd)
+        except Exception:
+            pass
+        self.root.after(200, self.fast_cmds)
 
     def handle_ok_message(self, m):
         try:
@@ -1444,14 +1461,14 @@ class App:
         last = getattr(self, "_status_sent", 0)
         if not force and time.time() - last < 900:
             return
-        if force and time.time() - last < 5:      # أحداث ورا بعض: نرسل وحدة بعد 6 ثواني
+        if force and time.time() - last < 2:      # أحداث ورا بعض: نرسل وحدة بعد 3 ثواني
             if not getattr(self, "_status_pending", False):
                 self._status_pending = True
 
                 def later():
                     self._status_pending = False
                     self.publish_status(force=True)
-                self.root.after(6000, later)
+                self.root.after(3000, later)
             return
         self._status_sent = time.time()
         rows = []
@@ -1514,7 +1531,7 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def apply_cmd(self, d):
-        self.root.after(2000, lambda: self.publish_status(force=True))
+        self.root.after(300, lambda: self.publish_status(force=True))
         cid, cmd, who, ts = str(d.get("id")), d.get("cmd"), str(d.get("who", "")), str(d.get("ts", ""))
         if cid in getattr(self, "_seen_cmds", set()):
             return

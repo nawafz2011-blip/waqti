@@ -129,6 +129,28 @@
 </div>
 <script>
 (function () {
+
+  // ننتظر رد الكمبيوتر على اتصال مفتوح (يوصل على طول)، ومعه فحص احتياطي كل 4 ثواني
+  function waitRes(topic, since, onDone, onTimeout) {
+    var finished = false, es = null, tries = 0;
+    function done(msg) { if (finished) return; finished = true; try { es && es.close(); } catch (e) {} onDone(msg); }
+    try {
+      es = new EventSource("https://ntfy.sh/" + encodeURIComponent(topic) + "/sse?since=" + since);
+      es.onmessage = function (e) { try { var m = JSON.parse(e.data); if (m.event === "message" || m.message) done(m.message); } catch (x) {} };
+    } catch (e) {}
+    (function poll() {
+      if (finished) return;
+      tries++;
+      fetch("https://ntfy.sh/" + encodeURIComponent(topic) + "/json?poll=1&since=" + since)
+        .then(function (x) { return x.text(); }).then(function (txt) {
+          var got = null;
+          txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") got = m.message; } catch (e) {} });
+          if (got) done(got);
+          else if (tries < 20) setTimeout(poll, 4000);
+          else if (!finished) { finished = true; try { es && es.close(); } catch (e) {} onTimeout(); }
+        }).catch(function () { if (tries < 20) setTimeout(poll, 4000); });
+    })();
+  }
   var q = new URLSearchParams(location.search);
   var topic = q.get("t"), pk = q.get("k"), admin = q.get("a");
   var hidden = 0, keyP = null;
@@ -333,19 +355,10 @@
         });
       }).then(function () {
         pst.textContent = "انرسل. ننتظر الكمبيوتر...";
-        var tries = 0;
-        (function poll() {
-          tries++;
-          fetch("https://ntfy.sh/" + encodeURIComponent(admin + "-res-" + id) + "/json?poll=1&since=" + since)
-            .then(function (x) { return x.text(); }).then(function (txt) {
-              var done = null;
-              txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") done = m.message; } catch (e) {} });
-              if (done) { var ok = done.indexOf("✅") >= 0; pst.className = "st " + (ok ? "okc" : "bad"); pst.textContent = ok ? "✅ تغيّر الرمز" : done;
-                if (ok) setTimeout(function () { pinbox.hidden = true; }, 2500); }
-              else if (tries < 25) setTimeout(poll, 3000);
-              else { pst.className = "st bad"; pst.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; }
-            }).catch(function () { if (tries < 25) setTimeout(poll, 3000); });
-        })();
+        waitRes(admin + "-res-" + id, since, function (done) {
+          var ok = done.indexOf("✅") >= 0; pst.className = "st " + (ok ? "okc" : "bad"); pst.textContent = ok ? "✅ تغيّر الرمز" : done;
+          if (ok) setTimeout(function () { pinbox.hidden = true; }, 2500);
+        }, function () { pst.className = "st bad"; pst.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; });
       }).catch(function () { pst.className = "st bad"; pst.textContent = "ما انرسل. تأكد من النت."; });
     };
     document.getElementById("cancel").onclick = function () { ask.hidden = true; pending = null; };
@@ -363,18 +376,10 @@
           body: JSON.stringify({ cmd: cmd, who: who, ts: ts, id: id, p: p }) });
       }).then(function () {
         st.textContent = "انرسل. ننتظر الكمبيوتر...";
-        var tries = 0;
-        (function poll() {
-          tries++;
-          fetch("https://ntfy.sh/" + encodeURIComponent(admin + "-res-" + id) + "/json?poll=1&since=" + since)
-            .then(function (x) { return x.text(); }).then(function (txt) {
-              var done = null;
-              txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") done = m.message; } catch (e) {} });
-              if (done) { var ok = done.indexOf("✅") >= 0; st.className = "st " + (ok ? "okc" : "bad"); st.textContent = done; if (ok) setTimeout(function () { ask.hidden = true; }, 2500); }
-              else if (tries < 25) setTimeout(poll, 3000);
-              else { st.className = "st bad"; st.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; }
-            }).catch(function () { if (tries < 25) setTimeout(poll, 3000); });
-        })();
+        waitRes(admin + "-res-" + id, since, function (done) {
+          var ok = done.indexOf("✅") >= 0; st.className = "st " + (ok ? "okc" : "bad"); st.textContent = done;
+          if (ok) setTimeout(function () { ask.hidden = true; }, 2500);
+        }, function () { st.className = "st bad"; st.textContent = "الكمبيوتر ما رد. تأكد إنه شغال."; });
       }).catch(function () { st.className = "st bad"; st.textContent = "ما انرسل. تأكد من النت."; });
     };
   }
