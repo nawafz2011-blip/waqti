@@ -313,7 +313,7 @@
         r.appendChild(n); r.appendChild(c); nowl.appendChild(r);
       });
       var ago = Math.max(0, Math.round((Date.now() / 1000 - lastStatus.ts) / 60));
-      nowt.textContent = ago < 2 ? "تحدّث الحين" : ("آخر تحديث قبل " + ago + " دقيقة" + (ago > 20 ? " · الكمبيوتر يمكن مطفي" : ""));
+      nowt.textContent = ago < 2 ? "تحدّث الحين" : ("آخر تحديث قبل " + ago + " دقيقة" + (ago > 75 ? " · الكمبيوتر يمكن مطفي" : ""));
     }
     function gotStatus(txt) {
       txt.split("\n").forEach(function (l) { try { var m = JSON.parse(l); if (m.event === "message") { var d = JSON.parse(m.message);

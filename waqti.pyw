@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 40
-CHANGES = "سطر جديد تحت شاشة القفل يبين حالة الإشعارات: ✅ آخر إرسال، أو ❌ والخطأ اللي يمنعها."
+VERSION = 41
+CHANGES = ("تصليح «الإشعارات ما توصل (429)»: ntfy كان يوقفنا لأن كل حساب يرسل كثير.\n"
+           "الحين: «مين يلعب» لما يصير شي + كل ساعة من حساب اللي يلعب بس، والأسماء لما تتغير بس.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -203,7 +204,7 @@ def msgs_link(cfg):
     return f"{MSGS_URL}?t={cfg['ntfy_topic']}&k={pub}"
 
 
-NET = {"ok_at": 0.0, "err_at": 0.0, "err": ""}
+NET = {"ok_at": 0.0, "err_at": 0.0, "err": "", "pause_until": 0.0}
 
 
 def net_ok():
@@ -213,6 +214,8 @@ def net_ok():
 def net_err(ex):
     NET["err_at"] = time.time()
     NET["err"] = f"{type(ex).__name__}: {ex}"[:90]
+    if "429" in str(ex):                      # ntfy يقول «كثير»: نوقف الإضافي نص ساعة
+        NET["pause_until"] = time.time() + 1800
 
 
 def ntfy_send_sync(cfg, text):
@@ -821,7 +824,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_sent") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -1407,11 +1410,10 @@ class App:
                             if ev.get("time"):
                                 since = max(since, int(ev["time"]))
                             wait = 3                       # الاتصال شغال
-                            net_ok()
                             if ev.get("event") == "message":
                                 self.handle_ok_message(ev.get("message", ""))
-                except Exception as ex:
-                    net_err(ex)
+                except Exception:
+                    pass
                 time.sleep(wait)                           # يرجع يتصل خلال ثواني، ويبطّئ لو تكرر الفشل
                 wait = min(wait * 2, 60)
         threading.Thread(target=run, daemon=True).start()
@@ -1482,8 +1484,10 @@ class App:
         if self.active:
             playing.add(self.active)
         last = getattr(self, "_status_sent", 0)
-        if not force and time.time() - last < 900:
-            return
+        if time.time() < NET["pause_until"]:
+            return                             # ntfy موقفنا: ما نرسل الإضافي
+        if not force and (not self.active or time.time() - last < 3600):
+            return                             # التحديث الدوري: كل ساعة ومن حساب اللي يلعب بس
         if force and time.time() - last < 2:      # أحداث ورا بعض: نرسل وحدة بعد 3 ثواني
             if not getattr(self, "_status_pending", False):
                 self._status_pending = True
@@ -1528,10 +1532,12 @@ class App:
     def publish_roster(self, force=False):
         """أسماء اللاعبين لموقع المنظم (عشان رابط المنظم يبقى ثابت)"""
         names = [p["name"] for p in self.cfg["players"]]
-        last = getattr(self, "_roster_sent", (None, 0))
-        if not force and last[0] == names and time.time() - last[1] < 6 * 3600:
+        if time.time() < NET["pause_until"]:
             return
-        self._roster_sent = (names, time.time())
+        sent = self.state.get("roster_sent") or {}
+        if not force and sent.get("names") == names and time.time() - float(sent.get("at", 0)) < 10 * 3600:
+            return                             # نفس الأسماء: ما نرسلها مرة ثانية (ntfy يحفظها 12 ساعة)
+        self.state_op(lambda st: st.update({"roster_sent": {"names": names, "at": time.time()}}))
         ntfy_publish_raw(self.cfg["admin_topic"] + "-roster", json.dumps({"roster": names}, ensure_ascii=False))
 
     # ---------- أوامر المنظم من الجوال (طلّعه / اسمح له)
