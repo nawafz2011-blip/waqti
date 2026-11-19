@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 39
-CHANGES = ("أوامر الجوال (ريست، طلّعه، اسمح له…) تشتغل حتى لو البرنامج مسكّر:\n"
-           "تنحفظ وتتنفذ أول ما يشتغل البرنامج (خلال 12 ساعة).")
+VERSION = 40
+CHANGES = "سطر جديد تحت شاشة القفل يبين حالة الإشعارات: ✅ آخر إرسال، أو ❌ والخطأ اللي يمنعها."
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -204,6 +203,18 @@ def msgs_link(cfg):
     return f"{MSGS_URL}?t={cfg['ntfy_topic']}&k={pub}"
 
 
+NET = {"ok_at": 0.0, "err_at": 0.0, "err": ""}
+
+
+def net_ok():
+    NET["ok_at"] = time.time()
+
+
+def net_err(ex):
+    NET["err_at"] = time.time()
+    NET["err"] = f"{type(ex).__name__}: {ex}"[:90]
+
+
 def ntfy_send_sync(cfg, text):
     """الرسالة تروح لـ ntfy مختومة، وموقعنا على GitHub يعرضها"""
     if not cfg.get("ntfy_topic"):
@@ -216,8 +227,10 @@ def ntfy_send_sync(cfg, text):
         req = urllib.request.Request("https://ntfy.sh/", data=json.dumps(body).encode("utf-8"), method="POST",
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=15) as r:
+            net_ok()
             return r.status == 200, ""
     except Exception as ex:
+        net_err(ex)
         return False, str(ex)
 
 
@@ -282,8 +295,9 @@ def ntfy_admin_send(cfg, title, text, click=None, topic=None):
             req = urllib.request.Request("https://ntfy.sh/", data=json.dumps(body).encode("utf-8"),
                                          method="POST", headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=15).close()
-        except Exception:
-            pass
+            net_ok()
+        except Exception as ex:
+            net_err(ex)
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -294,8 +308,9 @@ def ntfy_publish_raw(topic, body):
             req = urllib.request.Request(f"https://ntfy.sh/{topic}", data=body.encode("utf-8"), method="POST",
                                          headers={"Priority": "1"})
             urllib.request.urlopen(req, timeout=15).close()
-        except Exception:
-            pass
+            net_ok()
+        except Exception as ex:
+            net_err(ex)
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -1091,7 +1106,13 @@ class App:
             if len(lines) == 6:
                 break
         self.recent_lbl.configure(text="\n".join(lines) or "ما فيه أحداث")
-        self.link_lbl.configure(text=f"النسخة {VERSION}     ·     رابط الرسائل: عند الكبير (الإعدادات ← رابط الإشعارات)")
+        if NET["err_at"] > NET["ok_at"]:
+            net = f"❌ الإشعارات ما توصل: {NET['err']}"
+        elif NET["ok_at"]:
+            net = f"✅ الإشعارات: آخر إرسال {h12(datetime.datetime.fromtimestamp(NET['ok_at']))}"
+        else:
+            net = "الإشعارات: ما انرسل شي للحين"
+        self.link_lbl.configure(text=f"النسخة {VERSION}     ·     {net}")
 
     def show_lock(self):
         if self.free:
@@ -1386,10 +1407,11 @@ class App:
                             if ev.get("time"):
                                 since = max(since, int(ev["time"]))
                             wait = 3                       # الاتصال شغال
+                            net_ok()
                             if ev.get("event") == "message":
                                 self.handle_ok_message(ev.get("message", ""))
-                except Exception:
-                    pass
+                except Exception as ex:
+                    net_err(ex)
                 time.sleep(wait)                           # يرجع يتصل خلال ثواني، ويبطّئ لو تكرر الفشل
                 wait = min(wait * 2, 60)
         threading.Thread(target=run, daemon=True).start()
