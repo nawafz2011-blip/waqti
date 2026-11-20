@@ -73,7 +73,7 @@
   .b.adj { background:rgba(52,211,153,.16); color:#34d399; }
   .adjrow { display:flex; gap:8px; align-items:center; }
   .adjrow .b { flex:0 0 auto; padding:10px 14px; font-size:1.1rem; }
-  .adjrow input { flex:1; min-width:0; width:0; letter-spacing:normal; }
+  .ask .adjrow input { flex:1; min-width:0; width:0; letter-spacing:normal; }
   .adjrow .b { min-width:52px; }
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
   .pr .acts { flex-wrap:wrap; justify-content:flex-end; }
@@ -125,7 +125,8 @@
       <div id="askt" class="askt"></div>
       <div id="adjbox" class="adjrow" hidden>
         <button id="adjm" class="b" type="button">−</button>
-        <input id="adjmin" type="text" inputmode="numeric" autocomplete="off" placeholder="كم دقيقة؟">
+        <input id="adjh" type="text" inputmode="numeric" autocomplete="off" placeholder="ساعات">
+        <input id="adjmin" type="text" inputmode="numeric" autocomplete="off" placeholder="دقايق">
         <button id="adjp" class="b" type="button">+</button>
       </div>
       <div id="adjnote" class="st" hidden></div>
@@ -283,16 +284,18 @@
     var askt = document.getElementById("askt"), pinI = document.getElementById("pin"), st = document.getElementById("st");
     var pending = null, shownKey = null;
     ctl.hidden = false;
-    var adjbox = document.getElementById("adjbox"), adjmin = document.getElementById("adjmin"), adjnote = document.getElementById("adjnote"), adjSign = 1;
+    var adjh = document.getElementById("adjh"), adjbox = document.getElementById("adjbox"), adjmin = document.getElementById("adjmin"), adjnote = document.getElementById("adjnote"), adjSign = 1;
     function drawAdj() {
       document.getElementById("adjp").className = "b " + (adjSign > 0 ? "adj" : "");
       document.getElementById("adjm").className = "b " + (adjSign < 0 ? "kick" : "");
-      var m = parseInt(norm(adjmin.value || "0"), 10) || 0;
-      adjnote.textContent = m ? (adjSign > 0 ? "بيزيد " : "بينقص ") + m + " دقيقة (لليوم بس)" : "اختر + أو − واكتب الدقايق";
+      var m = adjTotal(), hh = Math.floor(m / 60), mm = m % 60;
+      var txt = (hh ? hh + " ساعة" : "") + (hh && mm ? " و " : "") + (mm ? mm + " دقيقة" : "");
+      adjnote.textContent = m ? (adjSign > 0 ? "بيزيد " : "بينقص ") + txt + " (لليوم بس)" : "اختر + أو − واكتب الساعات والدقايق";
     }
     document.getElementById("adjp").onclick = function () { adjSign = 1; drawAdj(); };
     document.getElementById("adjm").onclick = function () { adjSign = -1; drawAdj(); };
-    adjmin.oninput = drawAdj;
+    function adjTotal() { return (parseInt(norm(adjh.value || "0"), 10) || 0) * 60 + (parseInt(norm(adjmin.value || "0"), 10) || 0); }
+    adjmin.oninput = adjh.oninput = drawAdj;
     function showPeople(people) {
       var key = people.join(",");
       if (key === shownKey) return;
@@ -310,10 +313,10 @@
         var b = document.createElement("button"); b.type = "button"; b.className = "b " + (a[0] === "adjust" ? "adj" : a[0] === "reset_time" ? "reset" : a[0] === "logout" ? "out" : a[0]); b.textContent = a[1];
         b.onclick = function () {
           pending = { cmd: a[0], who: n }; ask.hidden = false; st.textContent = ""; st.className = "st";
-          adjSign = 1; adjbox.hidden = adjnote.hidden = a[0] !== "adjust"; adjmin.value = ""; drawAdj();
+          adjSign = 1; adjbox.hidden = adjnote.hidden = a[0] !== "adjust"; adjmin.value = adjh.value = ""; drawAdj();
           askt.textContent = { kick: "تطلّع " + n + " من الجهاز وتمنعه يدخل؟", allow: "تسمح لـ " + n + " يدخل؟",
                                reset_time: "ترجع وقت " + n + " كامل؟", adjust: "كم تزيد أو تنقص من وقت " + n + " اليوم؟", logout: "تطلّع " + n + " من حسابه؟ (يقدر يرجع بعدين)" }[a[0]];
-          pinI.value = ""; (a[0] === "adjust" ? adjmin : pinI).focus();
+          pinI.value = ""; (a[0] === "adjust" ? adjh : pinI).focus();
         };
         acts.appendChild(b);
       });
@@ -391,8 +394,8 @@
       if (!pinI.value.trim()) { st.className = "st bad"; st.textContent = "اكتب الرمز"; return; }
       var ts = String(Date.now()), id = Math.random().toString(36).slice(2, 10), cmd = pending.cmd, who = pending.who;
       if (cmd === "adjust") {
-        var mins = parseInt(norm(adjmin.value || "0"), 10) || 0;
-        if (mins <= 0 || mins > 1440) { st.className = "st bad"; st.textContent = "اكتب كم دقيقة (1 إلى 1440)"; return; }
+        var mins = adjTotal();
+        if (mins <= 0 || mins > 1440) { st.className = "st bad"; st.textContent = "اكتب الساعات أو الدقايق (لين 24 ساعة)"; return; }
         cmd = "adjust:" + (adjSign * mins);
       }
       var since = Math.floor(Date.now() / 1000) - 5;
