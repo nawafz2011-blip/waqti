@@ -70,6 +70,11 @@
   .nowt { color:var(--muted); font-size:.8rem; }
   .b.out { background:rgba(251,191,36,.16); color:var(--amber); }
   .b.reset { background:rgba(91,140,255,.16); color:var(--blue); }
+  .b.adj { background:rgba(52,211,153,.16); color:#34d399; }
+  .adjrow { display:flex; gap:8px; align-items:center; }
+  .adjrow .b { flex:0 0 auto; padding:10px 14px; font-size:1.1rem; }
+  .adjrow input { flex:1; min-width:0; width:0; letter-spacing:normal; }
+  .adjrow .b { min-width:52px; }
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
   .pr .acts { flex-wrap:wrap; justify-content:flex-end; }
   .b.go { background:var(--green); color:#062b1d; }
@@ -118,6 +123,12 @@
     </div>
     <div id="ask" class="ask" hidden>
       <div id="askt" class="askt"></div>
+      <div id="adjbox" class="adjrow" hidden>
+        <button id="adjm" class="b" type="button">−</button>
+        <input id="adjmin" type="text" inputmode="numeric" autocomplete="off" placeholder="كم دقيقة؟">
+        <button id="adjp" class="b" type="button">+</button>
+      </div>
+      <div id="adjnote" class="st" hidden></div>
       <input id="pin" type="password" autocomplete="off" placeholder="رمز الكبير">
       <div class="row"><button id="go" class="b go" type="button">تأكيد</button><button id="cancel" class="b" type="button">إلغاء</button></div>
       <div id="st" class="st" role="status"></div>
@@ -272,6 +283,16 @@
     var askt = document.getElementById("askt"), pinI = document.getElementById("pin"), st = document.getElementById("st");
     var pending = null, shownKey = null;
     ctl.hidden = false;
+    var adjbox = document.getElementById("adjbox"), adjmin = document.getElementById("adjmin"), adjnote = document.getElementById("adjnote"), adjSign = 1;
+    function drawAdj() {
+      document.getElementById("adjp").className = "b " + (adjSign > 0 ? "adj" : "");
+      document.getElementById("adjm").className = "b " + (adjSign < 0 ? "kick" : "");
+      var m = parseInt(norm(adjmin.value || "0"), 10) || 0;
+      adjnote.textContent = m ? (adjSign > 0 ? "بيزيد " : "بينقص ") + m + " دقيقة (لليوم بس)" : "اختر + أو − واكتب الدقايق";
+    }
+    document.getElementById("adjp").onclick = function () { adjSign = 1; drawAdj(); };
+    document.getElementById("adjm").onclick = function () { adjSign = -1; drawAdj(); };
+    adjmin.oninput = drawAdj;
     function showPeople(people) {
       var key = people.join(",");
       if (key === shownKey) return;
@@ -285,13 +306,14 @@
       var r = document.createElement("div"); r.className = "pr";
       var nm = document.createElement("span"); nm.className = "n"; nm.textContent = n;
       var acts = document.createElement("div"); acts.className = "acts";
-      [["reset_time", "ريست وقته 🔄"], ["logout", "سجّل خروجه 🚪"], ["kick", "طلّعه وامنعه 🚫"], ["allow", "اسمح له ✅"]].forEach(function (a) {
-        var b = document.createElement("button"); b.type = "button"; b.className = "b " + (a[0] === "reset_time" ? "reset" : a[0] === "logout" ? "out" : a[0]); b.textContent = a[1];
+      [["adjust", "عدّل وقته ⏱"], ["reset_time", "ريست وقته 🔄"], ["logout", "سجّل خروجه 🚪"], ["kick", "طلّعه وامنعه 🚫"], ["allow", "اسمح له ✅"]].forEach(function (a) {
+        var b = document.createElement("button"); b.type = "button"; b.className = "b " + (a[0] === "adjust" ? "adj" : a[0] === "reset_time" ? "reset" : a[0] === "logout" ? "out" : a[0]); b.textContent = a[1];
         b.onclick = function () {
           pending = { cmd: a[0], who: n }; ask.hidden = false; st.textContent = ""; st.className = "st";
+          adjSign = 1; adjbox.hidden = adjnote.hidden = a[0] !== "adjust"; adjmin.value = ""; drawAdj();
           askt.textContent = { kick: "تطلّع " + n + " من الجهاز وتمنعه يدخل؟", allow: "تسمح لـ " + n + " يدخل؟",
-                               reset_time: "ترجع وقت " + n + " كامل؟", logout: "تطلّع " + n + " من حسابه؟ (يقدر يرجع بعدين)" }[a[0]];
-          pinI.value = ""; pinI.focus();
+                               reset_time: "ترجع وقت " + n + " كامل؟", adjust: "كم تزيد أو تنقص من وقت " + n + " اليوم؟", logout: "تطلّع " + n + " من حسابه؟ (يقدر يرجع بعدين)" }[a[0]];
+          pinI.value = ""; (a[0] === "adjust" ? adjmin : pinI).focus();
         };
         acts.appendChild(b);
       });
@@ -300,7 +322,7 @@
     if (people.length) {
       var all = document.createElement("button"); all.type = "button"; all.className = "b all"; all.textContent = "🔄 ريست للكل (دور جديد، والكل يرجع له وقته)";
       all.onclick = function () {
-        pending = { cmd: "reset_round", who: "الكل" }; ask.hidden = false; st.textContent = ""; st.className = "st";
+        pending = { cmd: "reset_round", who: "الكل" }; ask.hidden = false; adjbox.hidden = adjnote.hidden = true; st.textContent = ""; st.className = "st";
         askt.textContent = "دور جديد والكل يرجع له وقته كامل؟"; pinI.value = ""; pinI.focus();
       };
       ppl.appendChild(all);
@@ -368,6 +390,11 @@
       if (!pending) { st.className = "st bad"; st.textContent = "اختر اسم أول: «طلّعه» أو «اسمح له»"; return; }
       if (!pinI.value.trim()) { st.className = "st bad"; st.textContent = "اكتب الرمز"; return; }
       var ts = String(Date.now()), id = Math.random().toString(36).slice(2, 10), cmd = pending.cmd, who = pending.who;
+      if (cmd === "adjust") {
+        var mins = parseInt(norm(adjmin.value || "0"), 10) || 0;
+        if (mins <= 0 || mins > 1440) { st.className = "st bad"; st.textContent = "اكتب كم دقيقة (1 إلى 1440)"; return; }
+        cmd = "adjust:" + (adjSign * mins);
+      }
       var since = Math.floor(Date.now() / 1000) - 5;
       st.className = "st"; st.textContent = "يرسل...";
       sha("waqti:" + norm(pinI.value)).then(function (h) { return sha(h + cmd + "|" + who + "|" + ts); }).then(function (p) {

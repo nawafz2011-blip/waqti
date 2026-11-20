@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 42
-CHANGES = ("الإشعارات صارت على قاعدتنا الخاصة (Firebase) بدل ntfy: بدون حد للرسائل.\n"
-           "«مين يلعب» يتحدث كل دقيقة. ورابط المنظم نفسه ما تغيّر.")
+VERSION = 43
+CHANGES = ("جديد: «⏱ عدّل وقته» من الجوال: تزيد أو تنقص من وقت أي واحد اليوم.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1492,7 +1491,8 @@ class App:
             d = json.loads(m)
         except Exception:
             return
-        if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout") and d.get("id"):
+        if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd")))) and d.get("id"):
             self.cmd_queue.append(d)
             return
         req = getattr(self, "pending_req", None)
@@ -1609,7 +1609,8 @@ class App:
                         d = json.loads(m)
                     except Exception:
                         continue
-                    if d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout") and d.get("id"):
+                    if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd")))) and d.get("id"):
                         self.cmd_queue.append(d)
             finally:
                 self._cmd_polling = False
@@ -1649,7 +1650,15 @@ class App:
             done.append(cid)
             del done[:-500]
             b = st.setdefault("blocked", [])
-            if cmd in ("reset_time", "reset_round", "set_pin", "logout"):
+            if cmd.startswith("adjust:") and first["yes"]:     # زيادة/نقص وقت اليوم (ما ينقص تحت الصفر)
+                p = self.player(who)
+                base = int(p["daily_minutes"]) * 60 if p else 0
+                bonus, used = st.setdefault("bonus", {}), st.setdefault("used", {})
+                left = base + bonus.get(who, 0) - used.get(who, 0)
+                delta = max(int(cmd[7:]) * 60, -max(0, left))
+                first["delta"] = delta
+                bonus[who] = bonus.get(who, 0) + delta
+            if cmd in ("reset_time", "reset_round", "set_pin", "logout") or cmd.startswith("adjust:"):
                 return
             if cmd == "kick" and who not in b:
                 b.append(who)
@@ -1670,6 +1679,23 @@ class App:
                 self.close_session()
                 if IS_WIN and self.linked_player() == who:
                     subprocess.Popen(["shutdown", "/l", "/f"], creationflags=0x08000000)
+            elif not self.active:
+                self.refresh_lock()
+            return
+        if cmd.startswith("adjust:"):
+            if first.get("yes"):
+                m = round(first.get("delta", 0) / 60)
+                self.log("adjust_cmd", (f"✅ المنظم زاد وقت {who} {dur(m)}" if m >= 0 else
+                                        f"المنظم نقّص من وقت {who} {dur(-m)}") + f"، باقي له {dur(max(0, round(self.remaining(who) / 60)))}",
+                         who, notify=True)
+                ntfy_admin_send(self.cfg, "وقتي", "✅ تم", topic=res_topic)
+            self.root.after(1500, lambda: self.publish_status(force=True))
+            if self.remaining(who) > 0:
+                self.unmark_finished(who)
+            if self.active == who and self.remaining(who) > 0:
+                self.grace_left = None
+                self.warned = self.remaining(who) <= int(self.cfg["warn_minutes"]) * 60
+                self.update_timer_ui()
             elif not self.active:
                 self.refresh_lock()
             return
