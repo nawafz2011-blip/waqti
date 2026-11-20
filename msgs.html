@@ -379,7 +379,7 @@
         waitRes(admin + "-res-" + id, since, function (done) {
           var ok = done.indexOf("✅") >= 0; pst.className = "st " + (ok ? "okc" : "bad"); pst.textContent = ok ? "✅ تغيّر الرمز" : done;
           if (ok) setTimeout(function () { pinbox.hidden = true; }, 2500);
-        }, function () { pst.className = "st okc"; pst.textContent = "انحفظ ✅ بيتنفذ أول ما يشتغل البرنامج (خلال 12 ساعة)"; });
+        }, function () { pst.className = "st okc"; pst.textContent = /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
       }).catch(function () { pst.className = "st bad"; pst.textContent = "ما انرسل. تأكد من النت."; });
     };
     document.getElementById("cancel").onclick = function () { ask.hidden = true; pending = null; };
@@ -404,7 +404,7 @@
         waitRes(admin + "-res-" + id, since, function (done) {
           var ok = done.indexOf("✅") >= 0; st.className = "st " + (ok ? "okc" : "bad"); st.textContent = done;
           if (ok) setTimeout(function () { ask.hidden = true; }, 2500);
-        }, function () { st.className = "st okc"; st.textContent = "انحفظ ✅ بيتنفذ أول ما يشتغل البرنامج (خلال 12 ساعة)"; });
+        }, function () { st.className = "st okc"; st.textContent = /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
       }).catch(function () { st.className = "st bad"; st.textContent = "ما انرسل. تأكد من النت."; });
     };
   }

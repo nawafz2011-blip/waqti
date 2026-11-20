@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 43
-CHANGES = ("جديد: «⏱ عدّل وقته» من الجوال: تزيد أو تنقص من وقت أي واحد اليوم.")
+VERSION = 44
+CHANGES = ("أوامر الجوال تشتغل حتى والكمبيوتر طافي: تنحفظ، وتتنفذ أول ما يشتغل (لين أسبوع).\n"
+           "تعديل الوقت والريست: لنفس اليوم بس.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -361,7 +362,7 @@ def ntfy_poll(topic, since):
 def fb_cleanup(cfg):
     """نمسح القديم عشان القاعدة تبقى صغيرة: الأوامر والردود بعد يوم، والرسائل بعد 3 أيام"""
     now = time.time()
-    for topic, keep in ((cfg["admin_topic"] + "-ok", 86400), (cfg["admin_topic"] + "-res-x", 86400),
+    for topic, keep in ((cfg["admin_topic"] + "-ok", 8 * 86400), (cfg["admin_topic"] + "-res-x", 86400),
                         (cfg["admin_topic"], 3 * 86400), (cfg.get("ntfy_topic", ""), 3 * 86400)):
         if not topic:
             continue
@@ -1457,8 +1458,8 @@ class App:
                             p, v = d.get("path", "/"), d.get("data")
                             items = (v if isinstance(v, dict) else {}) if p == "/" else {p.strip("/").split("/")[0]: v}
                             for k, m, t in fb_items(items):
-                                if k in seen or t < time.time() - 12 * 3600:
-                                    continue          # الأوامر الأقدم من 12 ساعة ما تتنفذ
+                                if k in seen or t < time.time() - 7 * 86400:
+                                    continue          # الأوامر الأقدم من أسبوع ما تتنفذ
                                 seen.add(k)
                                 self.handle_ok_message(m)
                 except Exception:
@@ -1623,7 +1624,8 @@ class App:
             return
         self._seen_cmds = getattr(self, "_seen_cmds", set()) | {cid}
         try:
-            fresh = -300 < time.time() - int(ts) / 1000 < 12 * 3600
+            age = time.time() - int(ts) / 1000
+            fresh = -300 < age < 7 * 86400          # الكمبيوتر كان طافي: ينفذ أوامر آخر أسبوع لما يشتغل
         except ValueError:
             fresh = False
         good = hashlib.sha256((self.cfg["admin_pin"] + f"{cmd}|{who}|{ts}").encode()).hexdigest()
@@ -1638,6 +1640,22 @@ class App:
                     del done[:-500]
                 self.state_op(op_bad)
                 ntfy_admin_send(self.cfg, "وقتي", "❌ الرمز غلط أو الطلب قديم", topic=res_topic)
+            return
+        h = int(self.cfg.get("day_start_hour", 4))
+        sent_day = (datetime.datetime.fromtimestamp(int(ts) / 1000) - datetime.timedelta(hours=h)).date().isoformat()
+        stale = ((cmd.startswith("adjust:") or cmd in ("reset_time", "reset_round")) and sent_day != self.today()) \
+            or (cmd == "logout" and age > 12 * 3600)
+        if stale:                          # تعديل/ريست من يوم راح (أو خروج قديم): ما يتنفذ على اليوم الجديد
+            if cid not in (self.state.get("cmds_done") or []):
+                def op_old(st):
+                    done = st.setdefault("cmds_done", [])
+                    done.append(cid)
+                    del done[:-500]
+                self.state_op(op_old)
+                what = "تسجيل خروج" if cmd == "logout" else "ريست" if cmd.startswith("reset") else "تعديل وقت"
+                self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd != 'reset_round' else ''} من الجوال ما تنفذ: "
+                                        "انرسل والكمبيوتر طافي، وراح يومه", who if self.player(who) else None, admin=True)
+                ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
             return
         if cmd == "set_pin":               # كل نسخة شغالة تحدّث الرمز عندها (عشان ما ترجعه القديم)
             self.cfg["admin_pin"] = who
