@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 44
-CHANGES = ("أوامر الجوال تشتغل حتى والكمبيوتر طافي: تنحفظ، وتتنفذ أول ما يشتغل (لين أسبوع).\n"
-           "تعديل الوقت والريست: لنفس اليوم بس.")
+VERSION = 45
+CHANGES = ("الرسائل تبقى أسبوع في صفحة المنظم وصفحة الإخوان (بدل 12 ساعة).")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -360,10 +359,10 @@ def ntfy_poll(topic, since):
 
 
 def fb_cleanup(cfg):
-    """نمسح القديم عشان القاعدة تبقى صغيرة: الأوامر والردود بعد يوم، والرسائل بعد 3 أيام"""
+    """نمسح القديم عشان القاعدة تبقى صغيرة: الردود بعد يوم، والأوامر والرسائل بعد 8 أيام"""
     now = time.time()
     for topic, keep in ((cfg["admin_topic"] + "-ok", 8 * 86400), (cfg["admin_topic"] + "-res-x", 86400),
-                        (cfg["admin_topic"], 3 * 86400), (cfg.get("ntfy_topic", ""), 3 * 86400)):
+                        (cfg["admin_topic"], 8 * 86400), (cfg.get("ntfy_topic", ""), 8 * 86400)):
         if not topic:
             continue
         path = fb_path(topic).rsplit("/", 1)[0] if "-res-" in topic else fb_path(topic)

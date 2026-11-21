@@ -137,7 +137,7 @@
   </section>
   <div id="note" class="note" hidden></div>
   <div id="list"></div>
-  <footer>آخر 12 ساعة · السجل الكامل في البرنامج</footer>
+  <footer>آخر أسبوع · السجل الكامل في البرنامج</footer>
 </div>
 <script>
 (function () {
@@ -155,7 +155,7 @@
     function h(e) { try { var d = JSON.parse(e.data); if (!d) return; var v = d.data, p = d.path, out = [];
       if (p === "/") { if (v && typeof v === "object") Object.keys(v).forEach(function (k) { out.push(fbEv(k, v[k])); }); }
       else { var k = p.split("/")[1]; if (p.split("/").length === 2) out.push(fbEv(k, v)); }
-      out.forEach(function (ev) { if (ev && ev.time > Date.now() / 1000 - 12 * 3600) onEv(ev); }); } catch (x) {} }
+      out.forEach(function (ev) { if (ev && ev.time > Date.now() / 1000 - 7 * 86400) onEv(ev); }); } catch (x) {} }
     es.addEventListener("put", h); es.addEventListener("patch", h);
     if (onOpen) es.onopen = onOpen; if (onErr) es.onerror = onErr;
     return es;
