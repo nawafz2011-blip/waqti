@@ -76,6 +76,8 @@
   .ask .adjrow input { flex:1; min-width:0; width:0; letter-spacing:normal; }
   .adjrow .b { min-width:52px; }
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
+  .b.say { background:rgba(52,211,153,.16); color:#34d399; }
+  .ask textarea { font:inherit; font-size:1.1rem; padding:10px; border-radius:9px; border:0; min-height:90px; resize:vertical; }
   .pr .acts { flex-wrap:wrap; justify-content:flex-end; }
   .b.go { background:var(--green); color:#062b1d; }
   .ask { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
@@ -112,6 +114,7 @@
   <section id="ctl" class="ctl" hidden>
     <div class="ctl-h">👑 تحكم المنظم</div>
     <div id="ppl" class="ppl"></div>
+    <button id="saybtn" class="b all say" type="button">💬 رسالة لشاشة الكمبيوتر</button>
     <button id="pinbtn" class="b all" type="button">🔑 تغيير رمز الكبير</button>
     <div id="pinbox" class="ask" hidden>
       <div class="askt">تغيير رمز الكبير</div>
@@ -130,6 +133,7 @@
         <button id="adjp" class="b" type="button">+</button>
       </div>
       <div id="adjnote" class="st" hidden></div>
+      <textarea id="saytext" maxlength="300" placeholder="اكتب الرسالة... (مثلاً: نام الحين 😴)" hidden></textarea>
       <input id="pin" type="password" autocomplete="off" placeholder="رمز الكبير">
       <div class="row"><button id="go" class="b go" type="button">تأكيد</button><button id="cancel" class="b" type="button">إلغاء</button></div>
       <div id="st" class="st" role="status"></div>
@@ -284,7 +288,7 @@
     var askt = document.getElementById("askt"), pinI = document.getElementById("pin"), st = document.getElementById("st");
     var pending = null, shownKey = null;
     ctl.hidden = false;
-    var adjh = document.getElementById("adjh"), adjbox = document.getElementById("adjbox"), adjmin = document.getElementById("adjmin"), adjnote = document.getElementById("adjnote"), adjSign = 1;
+    var saytext = document.getElementById("saytext"), adjh = document.getElementById("adjh"), adjbox = document.getElementById("adjbox"), adjmin = document.getElementById("adjmin"), adjnote = document.getElementById("adjnote"), adjSign = 1;
     function drawAdj() {
       document.getElementById("adjp").className = "b " + (adjSign > 0 ? "adj" : "");
       document.getElementById("adjm").className = "b " + (adjSign < 0 ? "kick" : "");
@@ -313,7 +317,7 @@
         var b = document.createElement("button"); b.type = "button"; b.className = "b " + (a[0] === "adjust" ? "adj" : a[0] === "reset_time" ? "reset" : a[0] === "logout" ? "out" : a[0]); b.textContent = a[1];
         b.onclick = function () {
           pending = { cmd: a[0], who: n }; ask.hidden = false; st.textContent = ""; st.className = "st";
-          adjSign = 1; adjbox.hidden = adjnote.hidden = a[0] !== "adjust"; adjmin.value = adjh.value = ""; drawAdj();
+          adjSign = 1; saytext.hidden = true; adjbox.hidden = adjnote.hidden = a[0] !== "adjust"; adjmin.value = adjh.value = ""; drawAdj();
           askt.textContent = { kick: "تطلّع " + n + " من الجهاز وتمنعه يدخل؟", allow: "تسمح لـ " + n + " يدخل؟",
                                reset_time: "ترجع وقت " + n + " كامل؟", adjust: "كم تزيد أو تنقص من وقت " + n + " اليوم؟", logout: "تطلّع " + n + " من حسابه؟ (يقدر يرجع بعدين)" }[a[0]];
           pinI.value = ""; (a[0] === "adjust" ? adjh : pinI).focus();
@@ -325,7 +329,7 @@
     if (people.length) {
       var all = document.createElement("button"); all.type = "button"; all.className = "b all"; all.textContent = "🔄 ريست للكل (دور جديد، والكل يرجع له وقته)";
       all.onclick = function () {
-        pending = { cmd: "reset_round", who: "الكل" }; ask.hidden = false; adjbox.hidden = adjnote.hidden = true; st.textContent = ""; st.className = "st";
+        pending = { cmd: "reset_round", who: "الكل" }; ask.hidden = false; adjbox.hidden = adjnote.hidden = saytext.hidden = true; st.textContent = ""; st.className = "st";
         askt.textContent = "دور جديد والكل يرجع له وقته كامل؟"; pinI.value = ""; pinI.focus();
       };
       ppl.appendChild(all);
@@ -364,6 +368,11 @@
     fbValue(admin + "-roster", function (ev) { try { var last = JSON.parse(ev.message).roster;
       if (last && last.length) { try { localStorage.setItem(rkey, JSON.stringify(last)); } catch (e) {} showPeople(last); } } catch (e) {} });
     var pinbox = document.getElementById("pinbox"), pst = document.getElementById("pst");
+    document.getElementById("saybtn").onclick = function () {
+      pending = { cmd: "say", who: "" }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
+      adjbox.hidden = adjnote.hidden = true; saytext.hidden = false; saytext.value = "";
+      askt.textContent = "💬 وش تبي يطلع على شاشة الكمبيوتر؟"; pinI.value = ""; saytext.focus();
+    };
     document.getElementById("pinbtn").onclick = function () { pinbox.hidden = false; ask.hidden = true; pst.textContent = "";
       ["oldpin", "newpin", "newpin2"].forEach(function (i) { document.getElementById(i).value = ""; }); document.getElementById("oldpin").focus(); };
     document.getElementById("pcancel").onclick = function () { pinbox.hidden = true; };
@@ -382,7 +391,7 @@
         waitRes(admin + "-res-" + id, since, function (done) {
           var ok = done.indexOf("✅") >= 0; pst.className = "st " + (ok ? "okc" : "bad"); pst.textContent = ok ? "✅ تغيّر الرمز" : done;
           if (ok) setTimeout(function () { pinbox.hidden = true; }, 2500);
-        }, function () { pst.className = "st okc"; pst.textContent = /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
+        }, function () { pst.className = "st okc"; pst.textContent = "الكمبيوتر طافي. انحفظ ✅ ويتغيّر أول ما يشتغل"; });
       }).catch(function () { pst.className = "st bad"; pst.textContent = "ما انرسل. تأكد من النت."; });
     };
     document.getElementById("cancel").onclick = function () { ask.hidden = true; pending = null; };
@@ -393,6 +402,10 @@
       if (!pending) { st.className = "st bad"; st.textContent = "اختر اسم أول: «طلّعه» أو «اسمح له»"; return; }
       if (!pinI.value.trim()) { st.className = "st bad"; st.textContent = "اكتب الرمز"; return; }
       var ts = String(Date.now()), id = Math.random().toString(36).slice(2, 10), cmd = pending.cmd, who = pending.who;
+      if (cmd === "say") {
+        who = saytext.value.trim();
+        if (!who) { st.className = "st bad"; st.textContent = "اكتب الرسالة"; return; }
+      }
       if (cmd === "adjust") {
         var mins = adjTotal();
         if (mins <= 0 || mins > 1440) { st.className = "st bad"; st.textContent = "اكتب الساعات أو الدقايق (لين 24 ساعة)"; return; }
@@ -407,7 +420,7 @@
         waitRes(admin + "-res-" + id, since, function (done) {
           var ok = done.indexOf("✅") >= 0; st.className = "st " + (ok ? "okc" : "bad"); st.textContent = done;
           if (ok) setTimeout(function () { ask.hidden = true; }, 2500);
-        }, function () { st.className = "st okc"; st.textContent = /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
+        }, function () { st.className = "st okc"; st.textContent = cmd === "say" ? "ما أحد قدام الكمبيوتر أو هو طافي. انحفظت ✅ وتطلع أول ما يفتح (خلال 12 ساعة)" : /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
       }).catch(function () { st.className = "st bad"; st.textContent = "ما انرسل. تأكد من النت."; });
     };
   }

@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 45
-CHANGES = ("الرسائل تبقى أسبوع في صفحة المنظم وصفحة الإخوان (بدل 12 ساعة).")
+VERSION = 46
+CHANGES = ("جديد: «💬 رسالة للشاشة» من جوال الكبير: تكتب أي شي ويطلع كبير على شاشة الكمبيوتر.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -863,7 +863,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_fb") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_fb", "say_shown") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -1492,7 +1492,7 @@ class App:
         except Exception:
             return
         if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
-                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd")))) and d.get("id"):
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") == "say") and d.get("id"):
             self.cmd_queue.append(d)
             return
         req = getattr(self, "pending_req", None)
@@ -1610,7 +1610,7 @@ class App:
                     except Exception:
                         continue
                     if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
-                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd")))) and d.get("id"):
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") == "say") and d.get("id"):
                         self.cmd_queue.append(d)
             finally:
                 self._cmd_polling = False
@@ -1630,6 +1630,7 @@ class App:
         good = hashlib.sha256((self.cfg["admin_pin"] + f"{cmd}|{who}|{ts}").encode()).hexdigest()
         res_topic = self.cfg["admin_topic"] + "-res-" + cid
         valid_target = (cmd == "reset_round" or (cmd == "set_pin" and re.fullmatch(r"[0-9a-f]{64}", who))
+                        or (cmd == "say" and 0 < len(who.strip()) <= 300)
                         or self.player(who))
         if not fresh or d.get("p") != good or not valid_target:
             if cid not in (self.state.get("cmds_done") or []):
@@ -1643,7 +1644,7 @@ class App:
         h = int(self.cfg.get("day_start_hour", 4))
         sent_day = (datetime.datetime.fromtimestamp(int(ts) / 1000) - datetime.timedelta(hours=h)).date().isoformat()
         stale = ((cmd.startswith("adjust:") or cmd in ("reset_time", "reset_round")) and sent_day != self.today()) \
-            or (cmd == "logout" and age > 12 * 3600)
+            or (cmd in ("logout", "say") and age > 12 * 3600)
         if stale:                          # تعديل/ريست من يوم راح (أو خروج قديم): ما يتنفذ على اليوم الجديد
             if cid not in (self.state.get("cmds_done") or []):
                 def op_old(st):
@@ -1651,10 +1652,27 @@ class App:
                     done.append(cid)
                     del done[:-500]
                 self.state_op(op_old)
-                what = "تسجيل خروج" if cmd == "logout" else "ريست" if cmd.startswith("reset") else "تعديل وقت"
-                self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd != 'reset_round' else ''} من الجوال ما تنفذ: "
-                                        "انرسل والكمبيوتر طافي، وراح يومه", who if self.player(who) else None, admin=True)
-                ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
+                what = "تسجيل خروج" if cmd == "logout" else "رسالة للشاشة" if cmd == "say" else "ريست" if cmd.startswith("reset") else "تعديل وقت"
+                self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd not in ('reset_round', 'say') else ''} من الجوال ما تنفذ: "
+                                        ("انرسل والكمبيوتر طافي، وصار له أكثر من 12 ساعة" if cmd in ("logout", "say") else "انرسل والكمبيوتر طافي، وراح يومه"), who if self.player(who) else None, admin=True)
+                ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم وما تنفذ" if cmd in ("logout", "say") else "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
+            return
+        if cmd == "say":                   # رسالة من الكبير تطلع على شاشة اللي قدام الكمبيوتر
+            if not session_active():
+                return                     # الحساب اللي قدام الشاشة هو اللي يعرضها
+            shown = {}
+
+            def op_say(st):
+                lst = st.setdefault("say_shown", [])
+                if cid not in lst:
+                    lst.append(cid)
+                    del lst[:-200]
+                    shown["yes"] = True
+            self.state_op(op_say)
+            if shown.get("yes"):
+                self.show_say(who.strip())
+                self.log("say_cmd", f"💬 رسالة الكبير طلعت على الشاشة: {who.strip()}", self.active, admin=True)
+                ntfy_admin_send(self.cfg, "وقتي", "✅ طلعت على الشاشة", topic=res_topic)
             return
         if cmd == "set_pin":               # كل نسخة شغالة تحدّث الرمز عندها (عشان ما ترجعه القديم)
             self.cfg["admin_pin"] = who
@@ -2002,6 +2020,24 @@ class App:
         t.geometry(f"+{(sw - t.winfo_reqwidth()) // 2}+{sh // 5}")
         t.bind("<Button-1>", lambda e: t.destroy())
         t.after(8000, lambda: t.winfo_exists() and t.destroy())
+
+    def show_say(self, text):
+        """رسالة الكبير: كبيرة بوسط الشاشة وتبقى لين أحد يضغط «تمام»"""
+        beep()
+        t = tk.Toplevel(self.root)
+        t.overrideredirect(True)
+        t.attributes("-topmost", True)
+        t.configure(bg=ACCENT, padx=30, pady=24)
+        bg = t.cget("bg")
+        tk.Label(t, text="💬 رسالة من الكبير", font=(FONT, 18, "bold"), bg=bg, fg="white").pack(anchor="e")
+        tk.Label(t, text=text, font=(FONT, 20), bg=bg, fg="white", justify="right", wraplength=560).pack(anchor="e", pady=(10, 16))
+        tk.Label(t, text=now_hm(), font=(FONT, 11), bg=bg, fg="white").pack(anchor="e")
+        tk.Button(t, text="تمام", font=(FONT, 14, "bold"), command=t.destroy, bg="white", fg=bg,
+                  relief="flat", padx=24, pady=6).pack(pady=(10, 0))
+        t.update_idletasks()
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        t.geometry(f"+{(sw - t.winfo_reqwidth()) // 2}+{(sh - t.winfo_reqheight()) // 3}")
+        t.lift()
 
     # ---------- loops
     def tick(self):
