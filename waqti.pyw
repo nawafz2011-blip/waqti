@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 48
-CHANGES = ("أوامر الجوال (طلّعه، سجّل خروجه...) توصل خلال 10 ثواني بالكثير حتى لو النت تقطّع.")
+VERSION = 49
+CHANGES = ("جديد: «📺 شوف شاشة الكمبيوتر» من جوال الكبير: بث مباشر 30 ثانية.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1579,7 +1579,7 @@ class App:
         except Exception:
             return
         if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
-                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") == "say") and d.get("id"):
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch")) and d.get("id"):
             self.cmd_queue.append(d)
             return
         req = getattr(self, "pending_req", None)
@@ -1697,7 +1697,7 @@ class App:
                     except Exception:
                         continue
                     if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
-                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") == "say") and d.get("id"):
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch")) and d.get("id"):
                         self.cmd_queue.append(d)
             finally:
                 self._cmd_polling = False
@@ -1718,6 +1718,7 @@ class App:
         res_topic = self.cfg["admin_topic"] + "-res-" + cid
         valid_target = (cmd == "reset_round" or (cmd == "set_pin" and re.fullmatch(r"[0-9a-f]{64}", who))
                         or (cmd == "say" and 0 < len(who.strip()) <= 300)
+                        or cmd == "watch"
                         or self.player(who))
         if not fresh or d.get("p") != good or not valid_target:
             if cid not in (self.state.get("cmds_done") or []):
@@ -1731,7 +1732,8 @@ class App:
         h = int(self.cfg.get("day_start_hour", 4))
         sent_day = (datetime.datetime.fromtimestamp(int(ts) / 1000) - datetime.timedelta(hours=h)).date().isoformat()
         stale = ((cmd.startswith("adjust:") or cmd in ("reset_time", "reset_round")) and sent_day != self.today()) \
-            or (cmd in ("logout", "say") and age > 12 * 3600)
+            or (cmd in ("logout", "say") and age > 12 * 3600) \
+            or (cmd == "watch" and age > 120)
         if stale:                          # تعديل/ريست من يوم راح (أو خروج قديم): ما يتنفذ على اليوم الجديد
             if cid not in (self.state.get("cmds_done") or []):
                 def op_old(st):
@@ -1739,10 +1741,26 @@ class App:
                     done.append(cid)
                     del done[:-500]
                 self.state_op(op_old)
-                what = "تسجيل خروج" if cmd == "logout" else "رسالة للشاشة" if cmd == "say" else "ريست" if cmd.startswith("reset") else "تعديل وقت"
-                self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd not in ('reset_round', 'say') else ''} من الجوال ما تنفذ: "
-                                        + ("انرسل والكمبيوتر طافي، وصار له أكثر من 12 ساعة" if cmd in ("logout", "say") else "انرسل والكمبيوتر طافي، وراح يومه"), who if self.player(who) else None, admin=True)
-                ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم وما تنفذ" if cmd in ("logout", "say") else "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
+                what = "تسجيل خروج" if cmd == "logout" else "رسالة للشاشة" if cmd == "say" else "شوف الشاشة" if cmd == "watch" else "ريست" if cmd.startswith("reset") else "تعديل وقت"
+                self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd not in ('reset_round', 'say', 'watch') else ''} من الجوال ما تنفذ: "
+                                        + ("الكمبيوتر كان طافي أو ما أحد قدامه" if cmd == "watch" else "انرسل والكمبيوتر طافي، وصار له أكثر من 12 ساعة" if cmd in ("logout", "say") else "انرسل والكمبيوتر طافي، وراح يومه"), who if self.player(who) else None, admin=True)
+                ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم وما تنفذ" if cmd in ("logout", "say", "watch") else "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
+            return
+        if cmd == "watch":                 # الكبير يبي يشوف الشاشة: بث 30 ثانية من الحساب اللي قدام الشاشة
+            if not session_active():
+                return
+            shown = {}
+
+            def op_w(st):
+                lst = st.setdefault("say_shown", [])
+                if cid not in lst:
+                    lst.append(cid)
+                    del lst[:-200]
+                    shown["yes"] = True
+            self.state_op(op_w)
+            if shown.get("yes"):
+                ntfy_admin_send(self.cfg, "وقتي", "✅ البث بدأ", topic=res_topic)
+                self.watch_screen(cid)
             return
         if cmd == "say":                   # رسالة من الكبير تطلع على شاشة اللي قدام الكمبيوتر
             if not session_active():
@@ -2157,18 +2175,48 @@ class App:
         t.geometry(f"+{(sw - t.winfo_reqwidth()) // 2}+{(sh - t.winfo_reqheight()) // 3}")
         t.lift()
 
+        self.stream_screen(cid, live, who, text, "say", 26)
+
+    def watch_screen(self, cid, seconds=30):
+        """بث الشاشة للكبير بدون رسالة. يطلع بس «📺» صغير جنب الوقت عشان يكون واضح"""
+        who = self.active or self.linked_player() or USER
+        live = {"ans": None, "left": seconds}
+        mark = None
+        try:
+            mark = tk.Toplevel(self.root)
+            mark.overrideredirect(True)
+            mark.attributes("-topmost", True)
+            tk.Label(mark, text="📺", font=(FONT, 11), bg="#111827", fg="white", padx=6, pady=2).pack()
+            mark.geometry(f"+{self.root.winfo_screenwidth() - 40}+{self.root.winfo_screenheight() - 80}")
+        except Exception:
+            pass
+
+        def count():
+            live["left"] -= 1
+            if live["left"] <= 0:
+                live["ans"] = "end"
+                try:
+                    mark and mark.destroy()
+                except Exception:
+                    pass
+                return
+            self.root.after(1000, count)
+        self.root.after(1000, count)
+        self.stream_screen(cid, live, who, "", "watch", seconds + 4)
+
+    def stream_screen(self, cid, live, who, text, kind, max_s):
+        """صورة للشاشة كل ثانية تقريباً لين يخلص (وصورة أخيرة فيها النتيجة)"""
         def stream():
-            """صورة للشاشة كل ثانية تقريباً لين يجاوب (وصورة أخيرة فيها الجواب)"""
             path = fb_path(self.cfg["admin_topic"] + "-live")
             n = 0
             start = time.time()
             while True:
                 t0 = time.time()
-                final = bool(live["ans"]) or t0 - start > 26
+                final = bool(live["ans"]) or t0 - start > max_s
                 img = screen_shot()
                 try:
                     fb_req("PUT", path, fb_entry(json.dumps({"id": cid, "n": n, "img": img, "who": who, "text": text,
-                                                             "left": max(0, live["left"]),
+                                                             "kind": kind, "left": max(0, live["left"]),
                                                              "ans": live["ans"] or ("none" if final else None)},
                                                             ensure_ascii=False)), timeout=20)
                     net_ok()

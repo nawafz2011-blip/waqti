@@ -77,6 +77,7 @@
   .adjrow .b { min-width:52px; }
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
   .b.say { background:rgba(52,211,153,.16); color:#34d399; }
+  .b.watch { background:rgba(248,113,113,.16); color:#fca5a5; }
   .live { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
   .live img { width:100%; border-radius:10px; background:#000; min-height:120px; }
   .live .lh { display:flex; justify-content:space-between; align-items:center; font-weight:700; }
@@ -120,6 +121,7 @@
   <section id="ctl" class="ctl" hidden>
     <div class="ctl-h">👑 تحكم المنظم</div>
     <div id="ppl" class="ppl"></div>
+    <button id="watchbtn" class="b all watch" type="button">📺 شوف شاشة الكمبيوتر (بث مباشر)</button>
     <button id="saybtn" class="b all say" type="button">💬 رسالة لشاشة الكمبيوتر</button>
     <button id="pinbtn" class="b all" type="button">🔑 تغيير رمز الكبير</button>
     <div id="pinbox" class="ask" hidden>
@@ -391,13 +393,19 @@
       var first = d.id !== liveSeen; liveSeen = d.id;
       livebox.hidden = false;
       if (d.img) liveimg.src = d.img;
-      livemsg.textContent = "رسالتك: " + (d.text || "") + (d.img ? "" : " · (ما قدر يصوّر الشاشة)");
-      var a = { ok: ["ok", "👍 " + d.who + " جاوب: أوكي"], no: ["no", "👎 " + d.who + " جاوب: لا"],
+      var watch = d.kind === "watch";
+      livemsg.textContent = (watch ? "حساب: " + d.who : "رسالتك: " + (d.text || "")) + (d.img ? "" : " · (ما قدر يصوّر الشاشة)");
+      var a = watch ? (d.ans ? ["none", "⏹ انتهى البث (30 ثانية)"] : ["wait", "🔴 مباشر · باقي " + d.left + " ث"]) : { ok: ["ok", "👍 " + d.who + " جاوب: أوكي"], no: ["no", "👎 " + d.who + " جاوب: لا"],
                 none: ["none", "⌛ ما جاوب خلال 20 ثانية"] }[d.ans] || ["wait", "⏳ ننتظر جوابه · باقي " + d.left + " ث"];
       liveans.className = "ans " + a[0]; liveans.textContent = a[1];
       livet.textContent = d.ans ? "📺 آخر صورة للشاشة · " + h12(new Date(ev.time * 1000)) : "📺 🔴 مباشر من الكمبيوتر";
       if (first) livebox.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+    document.getElementById("watchbtn").onclick = function () {
+      pending = { cmd: "watch", who: "screen" }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
+      adjbox.hidden = adjnote.hidden = saytext.hidden = true;
+      askt.textContent = "📺 تشوف شاشة الكمبيوتر 30 ثانية؟ (يطلع 📺 صغير بزاوية الشاشة)"; pinI.value = ""; pinI.focus();
+    };
     document.getElementById("saybtn").onclick = function () {
       pending = { cmd: "say", who: "" }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
       adjbox.hidden = adjnote.hidden = true; saytext.hidden = false; saytext.value = "";
@@ -450,7 +458,7 @@
         waitRes(admin + "-res-" + id, since, function (done) {
           var ok = done.indexOf("✅") >= 0; st.className = "st " + (ok ? "okc" : "bad"); st.textContent = done;
           if (ok) setTimeout(function () { ask.hidden = true; }, 2500);
-        }, function () { st.className = "st okc"; st.textContent = cmd === "say" ? "ما أحد قدام الكمبيوتر أو هو طافي. انحفظت ✅ وتطلع أول ما يفتح (خلال 12 ساعة)" : /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
+        }, function () { st.className = "st okc"; st.textContent = cmd === "watch" ? "ما أحد قدام الكمبيوتر (الشاشة مقفلة) أو هو طافي" : cmd === "say" ? "ما أحد قدام الكمبيوتر أو هو طافي. انحفظت ✅ وتطلع أول ما يفتح (خلال 12 ساعة)" : /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
       }).catch(function () { st.className = "st bad"; st.textContent = "ما انرسل. تأكد من النت."; });
     };
   }
