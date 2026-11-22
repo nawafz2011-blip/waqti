@@ -393,7 +393,17 @@
       if (!lastStatus) return;
       nowS.hidden = false; nowl.innerHTML = "";
       var age = Math.max(0, Date.now() / 1000 - lastStatus.ts);
+      // اللي يلعب يتحدث كل دقيقة. لو سكت الكمبيوتر أكثر من 3 دقايق: انطفى أو انقطع، فنوقف العداد
+      var stale = age > 180 && lastStatus.players.some(function (p) { return p.state === "playing"; });
       lastStatus.players.forEach(function (p) {
+        if (stale && p.state === "playing") {
+          var r0 = document.createElement("div"); r0.className = "nr";
+          var n0 = document.createElement("span"); n0.className = "n"; n0.textContent = p.name;
+          var c0 = document.createElement("span"); c0.className = "chip2 c-idle";
+          c0.textContent = "⚪ كان يلعب · باقي له " + hmLeft(p.rem);
+          r0.appendChild(n0); r0.appendChild(c0); nowl.appendChild(r0);
+          return;
+        }
         var left = p.state === "playing" ? Math.max(0, p.rem - age) : p.rem;
         var r = document.createElement("div"); r.className = "nr";
         var n = document.createElement("span"); n.className = "n"; n.textContent = p.name;
@@ -405,7 +415,8 @@
         r.appendChild(n); r.appendChild(c); nowl.appendChild(r);
       });
       var ago = Math.max(0, Math.round((Date.now() / 1000 - lastStatus.ts) / 60));
-      nowt.textContent = ago < 2 ? "تحدّث الحين" : ("آخر تحديث قبل " + ago + " دقيقة" + (ago > 75 ? " · الكمبيوتر يمكن مطفي" : ""));
+      nowt.textContent = stale ? "⚠️ الكمبيوتر ما رد من " + ago + " دقيقة (طافي أو انقطع النت) · الوقت ما ينحسب وهو طافي"
+        : ago < 2 ? "تحدّث الحين" : ("آخر تحديث قبل " + ago + " دقيقة" + (ago > 75 ? " · الكمبيوتر يمكن مطفي" : ""));
     }
     fbValue(admin + "-status", function (ev) { try { var d = JSON.parse(ev.message);
       if (d.players && (!lastStatus || d.ts >= lastStatus.ts)) lastStatus = d; drawNow(); } catch (e) {} });

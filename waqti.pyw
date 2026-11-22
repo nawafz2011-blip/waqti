@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 50
-CHANGES = ("جديد: إعدادات الكمبيوتر صارت في جوال الكبير: إضافة وتعديل وحذف لاعبين،\n"
-           "عقوبة الكذب، والمهلة والتنبيه وباقي الإعدادات.")
+VERSION = 51
+CHANGES = ("لما الكمبيوتر يطفي أو أحد يطلع من حسابه، «الحين» في جوال الكبير يعرف على طول إنه وقف يلعب.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1712,7 +1711,7 @@ class App:
                 self._polling = False
         threading.Thread(target=run, daemon=True).start()
 
-    def publish_status(self, force=False):
+    def publish_status(self, force=False, sync=False):
         """مين يلعب الحين وكم باقي، لرابط المنظم (كل دقيقة لو أحد يلعب، وكل 10 دقايق لو لا)"""
         playing = {n for n in (self.state.get("active_by") or {}).values() if n}
         if self.active:
@@ -1722,7 +1721,7 @@ class App:
             return                             # ntfy موقفنا: ما نرسل الإضافي
         if not force and (not self.active or time.time() - last < 60):
             return                             # التحديث الدوري: كل دقيقة ومن حساب اللي يلعب بس
-        if force and time.time() - last < 2:      # أحداث ورا بعض: نرسل وحدة بعد 3 ثواني
+        if force and not sync and time.time() - last < 2:      # أحداث ورا بعض: نرسل وحدة بعد 3 ثواني
             if not getattr(self, "_status_pending", False):
                 self._status_pending = True
 
@@ -1738,8 +1737,14 @@ class App:
             st = ("blocked" if n in (self.state.get("blocked") or []) else "open" if self.is_open(n)
                   else "playing" if n in playing else "done" if n in self.state.get("round", []) else "idle")
             rows.append({"name": n, "state": st, "rem": int(max(0, self.remaining(n)))})
-        ntfy_publish_raw(self.cfg["admin_topic"] + "-status",
-                         json.dumps({"ts": int(time.time()), "players": rows}, ensure_ascii=False))
+        body = json.dumps({"ts": int(time.time()), "players": rows}, ensure_ascii=False)
+        if sync:                               # الكمبيوتر يطفي: نرسل على طول قبل لا يقفل البرنامج
+            try:
+                fb_req("PUT", fb_path(self.cfg["admin_topic"] + "-status"), fb_entry(body), timeout=4)
+            except Exception:
+                pass
+            return
+        ntfy_publish_raw(self.cfg["admin_topic"] + "-status", body)
 
     def week_id(self):
         d = datetime.date.fromisoformat(self.today())
@@ -2082,6 +2087,7 @@ class App:
             self.close_session()
         else:
             self.save_state()
+        self.publish_status(force=True, sync=True)   # جوال الكبير يعرف إنه وقف يلعب
 
     def lock_now(self):
         name = self.active
