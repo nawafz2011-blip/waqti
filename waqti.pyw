@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 46
-CHANGES = ("جديد: «💬 رسالة للشاشة» من جوال الكبير: تكتب أي شي ويطلع كبير على شاشة الكمبيوتر.")
+VERSION = 47
+CHANGES = ("رسالة الكبير للشاشة صار فيها «أوكي» و«لا» و20 ثانية للجواب،\n"
+           "والكبير يشوف الشاشة بث مباشر من جواله لين يجاوب.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -372,6 +373,75 @@ def fb_cleanup(cfg):
                 fb_req("PATCH", path, old)
         except Exception:
             pass
+
+
+def _png(w, h, rgb):
+    """صورة PNG بدون مكتبات إضافية"""
+    import zlib
+    import struct
+    row = w * 3
+    raw = b"".join(b"\x00" + bytes(rgb[y * row:(y + 1) * row]) for y in range(h))
+
+    def chunk(kind, data):
+        c = kind + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+def screen_shot(width=720):
+    """صورة صغيرة للشاشة (للبث للكبير). ترجع رابط data: أو None"""
+    import base64
+    import io
+    try:
+        if IS_WIN:
+            import ctypes
+            from ctypes import wintypes
+            u, g = ctypes.windll.user32, ctypes.windll.gdi32
+            try:
+                u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))    # الشاشة كاملة بالحجم الحقيقي
+            except Exception:
+                pass
+            sw, sh = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+            w = min(width, sw)
+            h = max(1, sh * w // sw)
+            src = u.GetDC(0)
+            dc = g.CreateCompatibleDC(src)
+            bmp = g.CreateCompatibleBitmap(src, w, h)
+            g.SelectObject(dc, bmp)
+            g.SetStretchBltMode(dc, 4)                                  # HALFTONE: تصغير ناعم
+            g.StretchBlt(dc, 0, 0, w, h, src, 0, 0, sw, sh, 0x00CC0020)
+
+            class BIH(ctypes.Structure):
+                _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
+                            ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                            ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", ctypes.c_long),
+                            ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+            bi = BIH(ctypes.sizeof(BIH), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+            buf = ctypes.create_string_buffer(w * h * 4)
+            g.GetDIBits(dc, bmp, 0, h, buf, ctypes.byref(bi), 0)
+            g.DeleteObject(bmp)
+            g.DeleteDC(dc)
+            u.ReleaseDC(0, src)
+            bgra = buf.raw
+            try:
+                from PIL import Image
+                im = Image.frombuffer("RGB", (w, h), bgra, "raw", "BGRX", 0, 1)
+                out = io.BytesIO()
+                im.save(out, "JPEG", quality=55)
+                return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
+            except Exception:
+                rgb = bytearray(w * h * 3)
+                rgb[0::3], rgb[1::3], rgb[2::3] = bgra[2::4], bgra[1::4], bgra[0::4]
+                return "data:image/png;base64," + base64.b64encode(_png(w, h, rgb)).decode()
+        from PIL import ImageGrab                                        # غير ويندوز (للتجربة)
+        im = ImageGrab.grab().convert("RGB")
+        im = im.resize((width, max(1, im.height * width // im.width)))
+        out = io.BytesIO()
+        im.save(out, "JPEG", quality=55)
+        return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
+    except Exception:
+        return None
 
 
 def load_config():
@@ -1670,7 +1740,7 @@ class App:
                     shown["yes"] = True
             self.state_op(op_say)
             if shown.get("yes"):
-                self.show_say(who.strip())
+                self.show_say(who.strip(), cid)
                 self.log("say_cmd", f"💬 رسالة الكبير طلعت على الشاشة: {who.strip()}", self.active, admin=True)
                 ntfy_admin_send(self.cfg, "وقتي", "✅ طلعت على الشاشة", topic=res_topic)
             return
@@ -2021,23 +2091,77 @@ class App:
         t.bind("<Button-1>", lambda e: t.destroy())
         t.after(8000, lambda: t.winfo_exists() and t.destroy())
 
-    def show_say(self, text):
-        """رسالة الكبير: كبيرة بوسط الشاشة وتبقى لين أحد يضغط «تمام»"""
+    def show_say(self, text, cid=""):
+        """رسالة الكبير: كبيرة بوسط الشاشة مع «أوكي» و«لا» و20 ثانية للجواب.
+        من أول ما تطلع لين يجاوب: الكبير يشوف الشاشة بث مباشر من جواله"""
         beep()
+        who = self.active or self.linked_player() or USER
+        live = {"ans": None, "left": 20, "done": False}
+        bg = ACCENT
         t = tk.Toplevel(self.root)
         t.overrideredirect(True)
         t.attributes("-topmost", True)
-        t.configure(bg=ACCENT, padx=30, pady=24)
-        bg = t.cget("bg")
+        t.configure(bg=bg, padx=30, pady=24)
         tk.Label(t, text="💬 رسالة من الكبير", font=(FONT, 18, "bold"), bg=bg, fg="white").pack(anchor="e")
-        tk.Label(t, text=text, font=(FONT, 20), bg=bg, fg="white", justify="right", wraplength=560).pack(anchor="e", pady=(10, 16))
-        tk.Label(t, text=now_hm(), font=(FONT, 11), bg=bg, fg="white").pack(anchor="e")
-        tk.Button(t, text="تمام", font=(FONT, 14, "bold"), command=t.destroy, bg="white", fg=bg,
-                  relief="flat", padx=24, pady=6).pack(pady=(10, 0))
+        tk.Label(t, text=text, font=(FONT, 20), bg=bg, fg="white", justify="right", wraplength=560).pack(anchor="e", pady=(10, 12))
+        cnt = tk.Label(t, text="", font=(FONT, 12), bg=bg, fg="white")
+        cnt.pack(anchor="e")
+        row = tk.Frame(t, bg=bg)
+        row.pack(pady=(12, 0))
+
+        def answer(a):
+            if live["ans"]:
+                return
+            live["ans"] = a
+            try:
+                t.destroy()
+            except Exception:
+                pass
+            txt = {"ok": f"👍 {who} جاوب: أوكي", "no": f"👎 {who} جاوب: لا",
+                   "none": f"⌛ ما أحد جاوب على رسالتك خلال 20 ثانية ({who})"}[a]
+            self.log("say_answer", txt + f" · الرسالة: {text}", self.active, admin=True)
+        tk.Button(row, text="أوكي 👍", font=(FONT, 14, "bold"), command=lambda: answer("ok"), bg=GOOD, fg="white",
+                  relief="flat", padx=22, pady=6).pack(side="right", padx=6)
+        tk.Button(row, text="لا 👎", font=(FONT, 14, "bold"), command=lambda: answer("no"), bg=BAD, fg="white",
+                  relief="flat", padx=22, pady=6).pack(side="right", padx=6)
+
+        def count():
+            if live["ans"]:
+                return
+            if live["left"] <= 0:
+                answer("none")
+                return
+            cnt.configure(text=f"جاوب خلال {live['left']} ثانية")
+            live["left"] -= 1
+            t.after(1000, count)
+        count()
         t.update_idletasks()
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         t.geometry(f"+{(sw - t.winfo_reqwidth()) // 2}+{(sh - t.winfo_reqheight()) // 3}")
         t.lift()
+
+        def stream():
+            """صورة للشاشة كل ثانية تقريباً لين يجاوب (وصورة أخيرة فيها الجواب)"""
+            path = fb_path(self.cfg["admin_topic"] + "-live")
+            n = 0
+            start = time.time()
+            while True:
+                t0 = time.time()
+                final = bool(live["ans"]) or t0 - start > 26
+                img = screen_shot()
+                try:
+                    fb_req("PUT", path, fb_entry(json.dumps({"id": cid, "n": n, "img": img, "who": who, "text": text,
+                                                             "left": max(0, live["left"]),
+                                                             "ans": live["ans"] or ("none" if final else None)},
+                                                            ensure_ascii=False)), timeout=20)
+                    net_ok()
+                except Exception as ex:
+                    net_err(ex)
+                n += 1
+                if final:
+                    return
+                time.sleep(max(0.2, 1.0 - (time.time() - t0)))
+        threading.Thread(target=stream, daemon=True).start()
 
     # ---------- loops
     def tick(self):

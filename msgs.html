@@ -77,6 +77,12 @@
   .adjrow .b { min-width:52px; }
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
   .b.say { background:rgba(52,211,153,.16); color:#34d399; }
+  .live { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
+  .live img { width:100%; border-radius:10px; background:#000; min-height:120px; }
+  .live .lh { display:flex; justify-content:space-between; align-items:center; font-weight:700; }
+  .live .ans { font-size:1.3rem; font-weight:800; text-align:center; padding:8px; border-radius:10px; }
+  .ans.ok { background:rgba(52,211,153,.18); color:#34d399; } .ans.no { background:rgba(248,113,113,.18); color:var(--red); }
+  .ans.none { background:rgba(251,191,36,.16); color:var(--amber); } .ans.wait { background:rgba(248,113,113,.12); color:#fca5a5; }
   .ask textarea { font:inherit; font-size:1.1rem; padding:10px; border-radius:9px; border:0; min-height:90px; resize:vertical; }
   .pr .acts { flex-wrap:wrap; justify-content:flex-end; }
   .b.go { background:var(--green); color:#062b1d; }
@@ -137,6 +143,12 @@
       <input id="pin" type="password" autocomplete="off" placeholder="رمز الكبير">
       <div class="row"><button id="go" class="b go" type="button">تأكيد</button><button id="cancel" class="b" type="button">إلغاء</button></div>
       <div id="st" class="st" role="status"></div>
+    </div>
+    <div id="livebox" class="live" hidden>
+      <div class="lh"><span id="livet">📺 شاشة الكمبيوتر</span><button id="liveclose" class="b" type="button">إخفاء</button></div>
+      <div id="liveans" class="ans wait"></div>
+      <img id="liveimg" alt="شاشة الكمبيوتر">
+      <div id="livemsg" class="st"></div>
     </div>
   </section>
   <div id="note" class="note" hidden></div>
@@ -368,6 +380,24 @@
     fbValue(admin + "-roster", function (ev) { try { var last = JSON.parse(ev.message).roster;
       if (last && last.length) { try { localStorage.setItem(rkey, JSON.stringify(last)); } catch (e) {} showPeople(last); } } catch (e) {} });
     var pinbox = document.getElementById("pinbox"), pst = document.getElementById("pst");
+    // 📺 بث شاشة الكمبيوتر: يبدأ أول ما تطلع رسالتك على الشاشة، ويوقف لما يجاوب أو بعد 20 ثانية
+    var livebox = document.getElementById("livebox"), liveimg = document.getElementById("liveimg"), liveans = document.getElementById("liveans");
+    var livet = document.getElementById("livet"), livemsg = document.getElementById("livemsg"), liveHidden = null, liveSeen = null;
+    document.getElementById("liveclose").onclick = function () { livebox.hidden = true; liveHidden = liveSeen; };
+    fbValue(admin + "-live", function (ev) {
+      var d; try { d = JSON.parse(ev.message); } catch (e) { return; }
+      var age = Date.now() / 1000 - ev.time;
+      if (d.id === liveHidden || (!d.ans && age > 40) || (d.ans && age > 900)) return;
+      var first = d.id !== liveSeen; liveSeen = d.id;
+      livebox.hidden = false;
+      if (d.img) liveimg.src = d.img;
+      livemsg.textContent = "رسالتك: " + (d.text || "") + (d.img ? "" : " · (ما قدر يصوّر الشاشة)");
+      var a = { ok: ["ok", "👍 " + d.who + " جاوب: أوكي"], no: ["no", "👎 " + d.who + " جاوب: لا"],
+                none: ["none", "⌛ ما جاوب خلال 20 ثانية"] }[d.ans] || ["wait", "⏳ ننتظر جوابه · باقي " + d.left + " ث"];
+      liveans.className = "ans " + a[0]; liveans.textContent = a[1];
+      livet.textContent = d.ans ? "📺 آخر صورة للشاشة · " + h12(new Date(ev.time * 1000)) : "📺 🔴 مباشر من الكمبيوتر";
+      if (first) livebox.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     document.getElementById("saybtn").onclick = function () {
       pending = { cmd: "say", who: "" }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
       adjbox.hidden = adjnote.hidden = true; saytext.hidden = false; saytext.value = "";
