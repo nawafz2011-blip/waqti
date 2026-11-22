@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 49
-CHANGES = ("جديد: «📺 شوف شاشة الكمبيوتر» من جوال الكبير: بث مباشر 30 ثانية.")
+VERSION = 50
+CHANGES = ("جديد: إعدادات الكمبيوتر صارت في جوال الكبير: إضافة وتعديل وحذف لاعبين،\n"
+           "عقوبة الكذب، والمهلة والتنبيه وباقي الإعدادات.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -773,6 +774,7 @@ class App:
         self.root.after(500, self.keep_on_top)
         self.root.after(5000, self.check_update)
         self.start_stream()
+        self.root.after(2000, self.publish_roster)    # الإعدادات لجوال الكبير من أول ما يشتغل
         self.root.after(200, self.fast_cmds)
         seen = self.cfg.setdefault("seen_versions", {})
         if seen.get(USER) != VERSION:
@@ -1414,12 +1416,101 @@ class App:
             if self.active == name:
                 self.close_session()
 
+    def apply_cfg(self, d, first):
+        """أمر إعدادات من الجوال. يرجع نص للسجل، أو يبدأ بـ ❌ لو فيه غلط"""
+        op = d.get("op")
+        players = self.cfg["players"]
+        find = lambda n: next((q for q in players if q["name"] == n), None)
+
+        def mins_ok(m):
+            m = int(m)
+            if not 0 <= m <= 24 * 60:
+                raise ValueError("الوقت لازم يكون بين 0 و 24 ساعة")
+            return m
+
+        def pin_val(v, old=""):
+            if v == "keep":
+                return old
+            if v == "" or re.fullmatch(r"[0-9a-f]{64}", str(v)):
+                return v
+            raise ValueError("رمز اللاعب غلط")
+        if op == "add":
+            name = str(d.get("name", "")).strip()[:30]
+            if not name:
+                return "❌ اكتب اسم"
+            if find(name):
+                return "❌ فيه لاعب بنفس الاسم" if first else f"الكبير أضاف لاعب: {name}"
+            m = mins_ok(d.get("mins", 120))
+            players.append({"name": name, "daily_minutes": m, "pin": pin_val(d.get("pin", "")),
+                            "windows_user": str(d.get("win", "")).strip().lower()})
+            self.save_cfg()
+            return f"الكبير أضاف لاعب: {name} ({dur(m)} باليوم)"
+        if op == "edit":
+            old, name = str(d.get("old", "")), str(d.get("name", "")).strip()[:30]
+            p = find(old) or find(name)
+            if not p or not name:
+                return "❌ اللاعب مو موجود"
+            if name != p["name"] and find(name):
+                return "❌ فيه لاعب بنفس الاسم"
+            m = mins_ok(d.get("mins", p["daily_minutes"]))
+            if p["name"] != name:
+                if first:
+                    def op_r(st):
+                        for k in ("used", "bonus", "nobody", "week"):
+                            if old in st.get(k, {}):
+                                st[k][name] = st[k].pop(old)
+                        for k in ("round", "blocked", "skipped"):
+                            st[k] = [name if x == old else x for x in st.get(k, [])]
+                    self.state_op(op_r)
+                if self.active == old:
+                    self.active = name
+                    self.state["active"] = name
+            p["name"], p["daily_minutes"] = name, m
+            p["pin"] = pin_val(d.get("pin", "keep"), p.get("pin", ""))
+            if "win" in d:
+                p["windows_user"] = str(d.get("win", "")).strip().lower()
+            self.save_cfg()
+            return f"الكبير عدّل {old}: صار {name}، {dur(m)} باليوم"
+        if op == "del":
+            p = find(str(d.get("name", "")))
+            if not p:
+                return "الكبير حذف لاعب" if not first else "❌ اللاعب مو موجود"
+            players.remove(p)
+            self.save_cfg()
+            return f"الكبير حذف اللاعب {p['name']}"
+        if op == "punish":
+            name = str(d.get("name", ""))
+            if not find(name):
+                return "❌ اللاعب مو موجود"
+            if first:
+                self.do_punish(name)
+            return f"⚖️ عقوبة كذب على {name}"
+        if op == "settings":
+            new = {}
+            for k, v in (d.get("set") or {}).items():
+                if k == "free_accounts":
+                    new[k] = str(v).strip()[:200]
+                elif k in ("grace_minutes", "warn_minutes", "nobody_awake_per_day", "day_start_hour", "last_wait_hours"):
+                    v = int(v)
+                    if v < 0 or v > (23 if k == "day_start_hour" else 1440):
+                        return "❌ رقم غلط"
+                    new[k] = v
+            changed = {k: v for k, v in new.items() if self.cfg.get(k) != v}
+            self.cfg.update(new)
+            self.save_cfg()
+            names = {"grace_minutes": "المهلة", "warn_minutes": "التنبيه", "nobody_awake_per_day": "«ما أحد صاحي» باليوم",
+                     "day_start_hour": "بداية اليوم", "last_wait_hours": "انتظار آخر واحد", "free_accounts": "الحسابات بدون حد"}
+            return "الكبير غيّر الإعدادات: " + ("، ".join(f"{names[k]} = {v}" for k, v in changed.items()) or "بدون تغيير")
+        return "❌ أمر مو معروف"
+
     def punish(self, name):
         v, _ = self.ask("عقوبة كذب", f"{name} كذب في «ما أحد صاحي»؟\n\nالعقوبة:\n"
                                      "• يخسر دوره الجاي\n• ينحرم من «ما أحد صاحي» أسبوع\n• توصل رسالة للكل",
                         [("إيه، عاقبه", "y"), ("لا", None)])
-        if not v:
-            return
+        if v:
+            self.do_punish(name)
+
+    def do_punish(self, name):
         until = time.time() + 7 * 24 * 3600
 
         def op(st):
@@ -1579,7 +1670,7 @@ class App:
         except Exception:
             return
         if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
-                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch")) and d.get("id"):
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch", "cfg")) and d.get("id"):
             self.cmd_queue.append(d)
             return
         req = getattr(self, "pending_req", None)
@@ -1673,15 +1764,27 @@ class App:
             self.log("report", f"📊 تقرير الأسبوع: {lines or 'ما أحد لعب'}", notify=True)
 
     def publish_roster(self, force=False):
-        """أسماء اللاعبين لموقع المنظم (عشان رابط المنظم يبقى ثابت)"""
+        """أسماء اللاعبين وإعداداتهم لموقع المنظم (عشان رابط المنظم يبقى ثابت ويقدر يعدّل من الجوال)"""
         names = [p["name"] for p in self.cfg["players"]]
         if time.time() < NET["pause_until"]:
             return
+        try:
+            accts = windows_accounts() if IS_WIN else []
+        except Exception:
+            accts = []
+        info = {"roster": names,
+                "players": [{"name": p["name"], "mins": int(p["daily_minutes"]), "pin": bool(p.get("pin")),
+                             "win": p.get("windows_user", "")} for p in self.cfg["players"]],
+                "settings": {k: self.cfg.get(k) for k in ("grace_minutes", "warn_minutes", "nobody_awake_per_day",
+                                                          "day_start_hour", "last_wait_hours", "free_accounts")},
+                "accounts": accts}
+        body = json.dumps(info, ensure_ascii=False, sort_keys=True)
+        key = hashlib.sha256(body.encode()).hexdigest()
         sent = self.state.get("roster_fb") or {}
-        if not force and sent.get("names") == names and time.time() - float(sent.get("at", 0)) < 10 * 3600:
-            return                             # نفس الأسماء: ما نرسلها مرة ثانية (ntfy يحفظها 12 ساعة)
-        self.state_op(lambda st: st.update({"roster_fb": {"names": names, "at": time.time()}}))
-        ntfy_publish_raw(self.cfg["admin_topic"] + "-roster", json.dumps({"roster": names}, ensure_ascii=False))
+        if not force and sent.get("key") == key and time.time() - float(sent.get("at", 0)) < 10 * 3600:
+            return                             # ما تغيّر شي: ما نرسله مرة ثانية
+        self.state_op(lambda st: st.update({"roster_fb": {"key": key, "at": time.time()}}))
+        ntfy_publish_raw(self.cfg["admin_topic"] + "-roster", body)
 
     # ---------- أوامر المنظم من الجوال (طلّعه / اسمح له)
     def poll_cmds(self):
@@ -1697,7 +1800,7 @@ class App:
                     except Exception:
                         continue
                     if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
-                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch")) and d.get("id"):
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch", "cfg")) and d.get("id"):
                         self.cmd_queue.append(d)
             finally:
                 self._cmd_polling = False
@@ -1719,6 +1822,7 @@ class App:
         valid_target = (cmd == "reset_round" or (cmd == "set_pin" and re.fullmatch(r"[0-9a-f]{64}", who))
                         or (cmd == "say" and 0 < len(who.strip()) <= 300)
                         or cmd == "watch"
+                        or (cmd == "cfg" and len(who) < 3000)
                         or self.player(who))
         if not fresh or d.get("p") != good or not valid_target:
             if cid not in (self.state.get("cmds_done") or []):
@@ -1745,6 +1849,30 @@ class App:
                 self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd not in ('reset_round', 'say', 'watch') else ''} من الجوال ما تنفذ: "
                                         + ("الكمبيوتر كان طافي أو ما أحد قدامه" if cmd == "watch" else "انرسل والكمبيوتر طافي، وصار له أكثر من 12 ساعة" if cmd in ("logout", "say") else "انرسل والكمبيوتر طافي، وراح يومه"), who if self.player(who) else None, admin=True)
                 ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم وما تنفذ" if cmd in ("logout", "say", "watch") else "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
+            return
+        if cmd == "cfg":                   # الإعدادات من الجوال: كل نسخة شغالة تحدّث عندها (عشان ما ترجّع القديم)
+            first = {}
+
+            def op_c(st):
+                done = st.setdefault("cmds_done", [])
+                first["yes"] = cid not in done
+                if first["yes"]:
+                    done.append(cid)
+                    del done[:-500]
+            self.state_op(op_c)
+            try:
+                msg = self.apply_cfg(json.loads(who), first.get("yes"))
+            except Exception as ex:
+                msg = f"❌ ما تنفذ: {ex}"
+            if first.get("yes"):
+                if msg.startswith("❌"):
+                    ntfy_admin_send(self.cfg, "وقتي", msg, topic=res_topic)
+                else:
+                    self.log("settings", msg + " (من الجوال)", notify=True)
+                    ntfy_admin_send(self.cfg, "وقتي", "✅ تم", topic=res_topic)
+                    self.publish_roster(force=True)
+            if not self.active and not self.dialogs:
+                self.refresh_lock()
             return
         if cmd == "watch":                 # الكبير يبي يشوف الشاشة: بث 30 ثانية من الحساب اللي قدام الشاشة
             if not session_active():

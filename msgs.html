@@ -78,6 +78,17 @@
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
   .b.say { background:rgba(52,211,153,.16); color:#34d399; }
   .b.watch { background:rgba(248,113,113,.16); color:#fca5a5; }
+  .setp, .pform { display:flex; flex-direction:column; gap:9px; border-top:1px solid var(--line); padding-top:12px; }
+  .pform { border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .sp-h { font-weight:800; margin-top:4px; }
+  .sp-p { display:flex; flex-direction:column; gap:6px; padding:10px; border-radius:10px; background:rgba(255,255,255,.04); }
+  .sp-p .top { display:flex; justify-content:space-between; gap:8px; font-weight:700; }
+  .sp-p .top span:last-child { color:var(--muted, #94a3b8); font-weight:400; font-size:.92rem; }
+  .sp-p .acts { display:flex; gap:6px; flex-wrap:wrap; }
+  .fld { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:.95rem; }
+  .fld input, .fld select { width:120px; flex:0 0 auto; padding:9px; border-radius:8px; border:0; font:inherit; text-align:center; }
+  .fld .hm { display:flex; gap:6px; } .fld .hm input { width:64px; }
+  .fld.chk { justify-content:flex-start; } .fld.chk input { width:auto; }
   .live { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
   .live img { width:100%; border-radius:10px; background:#000; min-height:120px; }
   .live .lh { display:flex; justify-content:space-between; align-items:center; font-weight:700; }
@@ -123,6 +134,30 @@
     <div id="ppl" class="ppl"></div>
     <button id="watchbtn" class="b all watch" type="button">📺 شوف شاشة الكمبيوتر (بث مباشر)</button>
     <button id="saybtn" class="b all say" type="button">💬 رسالة لشاشة الكمبيوتر</button>
+    <button id="setbtn" class="b all" type="button">⚙️ الإعدادات (اللاعبين والوقت)</button>
+    <div id="setp" class="setp" hidden>
+      <div class="sp-h">👥 اللاعبين</div>
+      <div id="splist"></div>
+      <button id="spadd" class="b allow" type="button">➕ إضافة لاعب</button>
+      <div id="pform" class="pform" hidden>
+        <div id="pformt" class="sp-h"></div>
+        <label class="fld">الاسم <input id="pf_name" type="text" autocomplete="off"></label>
+        <label class="fld">الوقت باليوم <span class="hm"><input id="pf_h" type="text" inputmode="numeric" placeholder="ساعات"><input id="pf_m" type="text" inputmode="numeric" placeholder="دقايق"></span></label>
+        <label class="fld">رمز اللاعب <input id="pf_pin" type="password" autocomplete="off" placeholder="اختياري"></label>
+        <label class="fld chk" id="pf_nopin_l"><input id="pf_nopin" type="checkbox"> شيل رمزه (يلعب بدون رمز)</label>
+        <label class="fld">حساب ويندوز حقه <select id="pf_win"></select></label>
+        <div class="row"><button id="pf_save" class="b go" type="button">حفظ</button><button id="pf_cancel" class="b" type="button">إلغاء</button></div>
+      </div>
+      <div class="sp-h">⏱ عام</div>
+      <label class="fld">المهلة بعد ما يخلص الوقت (دقايق) <input id="s_grace_minutes" type="text" inputmode="numeric"></label>
+      <label class="fld">تنبيه قبل نهاية الوقت (دقايق) <input id="s_warn_minutes" type="text" inputmode="numeric"></label>
+      <label class="fld">كم مرة «ما أحد صاحي» باليوم <input id="s_nobody_awake_per_day" type="text" inputmode="numeric"></label>
+      <label class="fld">اليوم الجديد يبدأ الساعة (0-23) <input id="s_day_start_hour" type="text" inputmode="numeric"></label>
+      <label class="fld">آخر واحد ينتظر كم ساعة <input id="s_last_wait_hours" type="text" inputmode="numeric"></label>
+      <label class="fld">حسابات بدون حد <input id="s_free_accounts" type="text" autocomplete="off" placeholder="مثلاً: big"></label>
+      <button id="s_save" class="b go" type="button">حفظ الإعدادات</button>
+      <div id="spnote" class="st"></div>
+    </div>
     <button id="pinbtn" class="b all" type="button">🔑 تغيير رمز الكبير</button>
     <div id="pinbox" class="ask" hidden>
       <div class="askt">تغيير رمز الكبير</div>
@@ -379,8 +414,80 @@
     try { saved = JSON.parse(localStorage.getItem(rkey) || "[]"); } catch (e) {}
     var fromLink = (q.get("p") || "").split(",").filter(Boolean);
     showPeople(saved.length ? saved : fromLink);
-    fbValue(admin + "-roster", function (ev) { try { var last = JSON.parse(ev.message).roster;
+    var cfgInfo = null;
+    fbValue(admin + "-roster", function (ev) { try { var info = JSON.parse(ev.message), last = info.roster;
+      if (info.players) { cfgInfo = info; drawSettings(); }
       if (last && last.length) { try { localStorage.setItem(rkey, JSON.stringify(last)); } catch (e) {} showPeople(last); } } catch (e) {} });
+    // ⚙️ الإعدادات من الجوال: كل تغيير ينرسل بأمر واحد (بالرمز)، والكمبيوتر يرسل الإعدادات الجديدة
+    var setp = document.getElementById("setp"), splist = document.getElementById("splist"), pform = document.getElementById("pform");
+    var spnote = document.getElementById("spnote"), editing = null;
+    var SKEYS = ["grace_minutes", "warn_minutes", "nobody_awake_per_day", "day_start_hour", "last_wait_hours", "free_accounts"];
+    function hmTxt(m) { var h = Math.floor(m / 60), mm = m % 60; return (h ? h + " س" : "") + (h && mm ? " و " : "") + (mm || !h ? mm + " د" : ""); }
+    function confirmCfg(d, text) {
+      pending = { cmd: "cfg", who: JSON.stringify(d) }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
+      adjbox.hidden = adjnote.hidden = saytext.hidden = true; askt.textContent = text; pinI.value = "";
+      ask.scrollIntoView({ behavior: "smooth", block: "center" }); pinI.focus();
+    }
+    document.getElementById("setbtn").onclick = function () { setp.hidden = !setp.hidden; drawSettings(true); };
+    function drawSettings(fill) {
+      if (!cfgInfo) { splist.innerHTML = '<div class="st">ننتظر الإعدادات من الكمبيوتر… (لازم البرنامج يكون شغال ونسخته 50 أو أكثر)</div>'; return; }
+      splist.innerHTML = "";
+      cfgInfo.players.forEach(function (p) {
+        var box = document.createElement("div"); box.className = "sp-p";
+        var top = document.createElement("div"); top.className = "top";
+        var a = document.createElement("span"); a.textContent = p.name + (p.pin ? " 🔒" : "");
+        var b = document.createElement("span"); b.textContent = hmTxt(p.mins) + " باليوم" + (p.win ? " · 🖥 " + p.win : "");
+        top.appendChild(a); top.appendChild(b);
+        var acts = document.createElement("div"); acts.className = "acts";
+        [["✏️ تعديل", "reset", function () { openForm(p); }],
+         ["⚖️ عقوبة كذب", "out", function () { confirmCfg({ op: "punish", name: p.name }, "⚖️ عقوبة كذب على " + p.name + "؟ يخسر دوره الجاي، وينحرم من «ما أحد صاحي» أسبوع، وتوصل رسالة للكل."); }],
+         ["🗑 حذف", "kick", function () { confirmCfg({ op: "del", name: p.name }, "🗑 تحذف " + p.name + "؟"); }]].forEach(function (x) {
+          var bt = document.createElement("button"); bt.type = "button"; bt.className = "b " + x[1]; bt.textContent = x[0]; bt.onclick = x[2]; acts.appendChild(bt);
+        });
+        box.appendChild(top); box.appendChild(acts); splist.appendChild(box);
+      });
+      if (fill) SKEYS.forEach(function (k) { var v = cfgInfo.settings[k]; document.getElementById("s_" + k).value = v == null ? "" : v; });
+    }
+    function openForm(p) {
+      editing = p; pform.hidden = false;
+      document.getElementById("pformt").textContent = p ? "✏️ تعديل " + p.name : "➕ لاعب جديد";
+      document.getElementById("pf_name").value = p ? p.name : "";
+      document.getElementById("pf_h").value = p ? Math.floor(p.mins / 60) : 2;
+      document.getElementById("pf_m").value = p ? p.mins % 60 : 0;
+      document.getElementById("pf_pin").value = ""; document.getElementById("pf_pin").placeholder = p && p.pin ? "اتركه فاضي = نفس الرمز" : "اختياري";
+      document.getElementById("pf_nopin").checked = false; document.getElementById("pf_nopin_l").hidden = !(p && p.pin);
+      var sel = document.getElementById("pf_win"); sel.innerHTML = "";
+      var accts = (cfgInfo.accounts || []).slice(); if (p && p.win && accts.indexOf(p.win) < 0) accts.push(p.win);
+      [""].concat(accts).forEach(function (a) { var o = document.createElement("option"); o.value = a; o.textContent = a || "بدون"; sel.appendChild(o); });
+      sel.value = p ? (p.win || "") : "";
+      pform.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    document.getElementById("spadd").onclick = function () { if (cfgInfo) openForm(null); };
+    document.getElementById("pf_cancel").onclick = function () { pform.hidden = true; };
+    document.getElementById("pf_save").onclick = function () {
+      var name = document.getElementById("pf_name").value.trim(), pinv = document.getElementById("pf_pin").value;
+      var h = parseInt(norm(document.getElementById("pf_h").value || "0"), 10) || 0, m = parseInt(norm(document.getElementById("pf_m").value || "0"), 10) || 0;
+      var mins = h * 60 + m;
+      if (!name) { spnote.className = "st bad"; spnote.textContent = "اكتب الاسم"; return; }
+      if (mins > 1440) { spnote.className = "st bad"; spnote.textContent = "الوقت لازم يكون 24 ساعة أو أقل"; return; }
+      spnote.textContent = "";
+      var nopin = document.getElementById("pf_nopin").checked, win = document.getElementById("pf_win").value;
+      (pinv.trim() ? sha("waqti:" + norm(pinv)) : Promise.resolve(null)).then(function (ph) {
+        var pinField = ph || (nopin ? "" : (editing ? "keep" : ""));
+        var d = editing ? { op: "edit", old: editing.name, name: name, mins: mins, pin: pinField, win: win }
+                        : { op: "add", name: name, mins: mins, pin: pinField, win: win };
+        confirmCfg(d, (editing ? "✏️ تحفظ " + name : "➕ تضيف " + name) + " · " + hmTxt(mins) + " باليوم" + (win ? " · 🖥 " + win : "") + "؟");
+        pform.hidden = true;
+      });
+    };
+    document.getElementById("s_save").onclick = function () {
+      var set = {}, bad = false;
+      SKEYS.forEach(function (k) { var v = document.getElementById("s_" + k).value.trim();
+        if (k === "free_accounts") set[k] = v; else { v = norm(v); if (!/^\d+$/.test(v)) bad = true; set[k] = parseInt(v, 10); } });
+      if (bad) { spnote.className = "st bad"; spnote.textContent = "الخانات لازم تكون أرقام"; return; }
+      spnote.textContent = "";
+      confirmCfg({ op: "settings", set: set }, "⚙️ تحفظ الإعدادات؟");
+    };
     var pinbox = document.getElementById("pinbox"), pst = document.getElementById("pst");
     // 📺 بث شاشة الكمبيوتر: يبدأ أول ما تطلع رسالتك على الشاشة، ويوقف لما يجاوب أو بعد 20 ثانية
     var livebox = document.getElementById("livebox"), liveimg = document.getElementById("liveimg"), liveans = document.getElementById("liveans");
