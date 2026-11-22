@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 51
-CHANGES = ("لما الكمبيوتر يطفي أو أحد يطلع من حسابه، «الحين» في جوال الكبير يعرف على طول إنه وقف يلعب.")
+VERSION = 52
+CHANGES = ("«اسمح له ✅» من الجوال صار يشيل عقوبة الكذب بعد، ويرجع له دوره.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1937,6 +1937,14 @@ class App:
                 b.append(who)
             if cmd == "allow" and who in b:
                 b.remove(who)
+            if cmd == "allow":                 # «اسمح له» يسامحه بعد: يشيل عقوبة الكذب ويرجع له دوره
+                pen = (st.get("penalty") or {}).pop(who, None)
+                was = who in st.get("skipped", [])
+                if was:
+                    st["skipped"].remove(who)
+                    if who in st.get("round", []):
+                        st["round"].remove(who)
+                first["forgave"] = bool(pen) or was
         self.state_op(op)
         if cmd == "set_pin":
             if first.get("yes"):
@@ -1983,7 +1991,8 @@ class App:
             if cmd == "kick":
                 self.log("kick", f"🚫 المنظم طلّع {who} من الجهاز ومنعه يدخل", who, notify=True)
             else:
-                self.log("allow", f"✅ المنظم سمح لـ {who} يدخل", who, notify=True)
+                self.log("allow", f"✅ المنظم سمح لـ {who} يدخل" + (" وشال عقوبته" if first.get("forgave") else ""),
+                         who, notify=True)
             ntfy_admin_send(self.cfg, "وقتي", "✅ تم", topic=res_topic)
         if cmd == "kick" and self.active == who:
             beep()
