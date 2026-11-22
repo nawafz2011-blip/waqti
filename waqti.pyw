@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 47
-CHANGES = ("رسالة الكبير للشاشة صار فيها «أوكي» و«لا» و20 ثانية للجواب،\n"
-           "والكبير يشوف الشاشة بث مباشر من جواله لين يجاوب.")
+VERSION = 48
+CHANGES = ("أوامر الجوال (طلّعه، سجّل خروجه...) توصل خلال 10 ثواني بالكثير حتى لو النت تقطّع.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -1503,14 +1502,24 @@ class App:
 
     def start_stream(self):
         """اتصال واحد مفتوح مع قاعدتنا: أوامر الجوال وموافقات الريست توصل منه على طول"""
+        seen = self._ok_seen = set()
+        lock = threading.Lock()
+        path = fb_path(self.cfg["admin_topic"] + "-ok")
+
+        def take(items):
+            for k, m, t in fb_items(items):
+                with lock:
+                    if k in seen or t < time.time() - 7 * 86400:
+                        continue          # الأوامر الأقدم من أسبوع ما تتنفذ
+                    seen.add(k)
+                self.handle_ok_message(m)
+
         def run():
-            seen = set()
             wait = 3
-            path = fb_path(self.cfg["admin_topic"] + "-ok")
             while True:
                 try:
                     req = urllib.request.Request(f"{FB_URL}/{path}.json", headers={"Accept": "text/event-stream"})
-                    with urllib.request.urlopen(req, timeout=120) as r:
+                    with urllib.request.urlopen(req, timeout=70) as r:   # القاعدة ترسل «موجود» كل 30 ثانية: لو سكتت، انقطع
                         event = ""
                         for raw in r:
                             line = raw.decode("utf-8", "ignore").strip()
@@ -1526,16 +1535,24 @@ class App:
                                 continue
                             p, v = d.get("path", "/"), d.get("data")
                             items = (v if isinstance(v, dict) else {}) if p == "/" else {p.strip("/").split("/")[0]: v}
-                            for k, m, t in fb_items(items):
-                                if k in seen or t < time.time() - 7 * 86400:
-                                    continue          # الأوامر الأقدم من أسبوع ما تتنفذ
-                                seen.add(k)
-                                self.handle_ok_message(m)
+                            take(items)
                 except Exception:
                     pass
                 time.sleep(wait)                           # يرجع يتصل خلال ثواني، ويبطّئ لو تكرر الفشل
                 wait = min(wait * 2, 60)
         threading.Thread(target=run, daemon=True).start()
+
+        def backup():
+            """احتياط: لو الاتصال المفتوح انقطع بدون ما نحس، نشيك على آخر الأوامر كل 10 ثواني"""
+            q = urllib.parse.urlencode({"orderBy": '"$key"', "limitToLast": 10})
+            while True:
+                time.sleep(10)
+                try:
+                    with urllib.request.urlopen(f"{FB_URL}/{path}.json?{q}", timeout=15) as r:
+                        take(json.loads(r.read().decode("utf-8", "ignore") or "null"))
+                except Exception:
+                    pass
+        threading.Thread(target=backup, daemon=True).start()
 
         def clean():
             while True:
@@ -1724,7 +1741,7 @@ class App:
                 self.state_op(op_old)
                 what = "تسجيل خروج" if cmd == "logout" else "رسالة للشاشة" if cmd == "say" else "ريست" if cmd.startswith("reset") else "تعديل وقت"
                 self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd not in ('reset_round', 'say') else ''} من الجوال ما تنفذ: "
-                                        ("انرسل والكمبيوتر طافي، وصار له أكثر من 12 ساعة" if cmd in ("logout", "say") else "انرسل والكمبيوتر طافي، وراح يومه"), who if self.player(who) else None, admin=True)
+                                        + ("انرسل والكمبيوتر طافي، وصار له أكثر من 12 ساعة" if cmd in ("logout", "say") else "انرسل والكمبيوتر طافي، وراح يومه"), who if self.player(who) else None, admin=True)
                 ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم وما تنفذ" if cmd in ("logout", "say") else "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
             return
         if cmd == "say":                   # رسالة من الكبير تطلع على شاشة اللي قدام الكمبيوتر
