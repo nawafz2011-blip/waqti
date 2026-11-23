@@ -31,8 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 52
-CHANGES = ("«اسمح له ✅» من الجوال صار يشيل عقوبة الكذب بعد، ويرجع له دوره.")
+VERSION = 53
+CHANGES = ("لو أحد سكّر البرنامج بدون رمز الكبير (مثلاً من مدير المهام): يرجع يشتغل بروحه خلال دقيقة،\n"
+           "ويرن جوال الكبير «⚠️ البرنامج انقفل».")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -652,6 +653,22 @@ def set_autostart_all():
     return r > 32
 
 
+def set_watchdog():
+    """مهمة ويندوز كل دقيقة: لو أحد سكّر البرنامج (مدير المهام)، يرجع يشتغل خلال دقيقة.
+    ما يرجع إذا الكبير سكّره بالرمز. لو البرنامج شغال، النسخة الجديدة تطلع على طول"""
+    if not IS_WIN or getattr(sys, "frozen", False):
+        return False
+    pyw = sys.executable.replace("python.exe", "pythonw.exe")
+    tr = f'"{pyw}" "{INSTALL_PATH}" --watchdog'
+    try:
+        r = subprocess.run(["schtasks", "/create", "/f", "/sc", "minute", "/mo", "1",
+                            "/tn", f"Waqti watchdog ({USER})", "/tr", tr],
+                           capture_output=True, creationflags=0x08000000, timeout=20)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def start_key_hook(callback, vk=0x70):
     """نسمع زر F1 في ويندوز كله (حتى داخل اللعبة) بدون ما نمنعه عن اللعبة"""
     if not IS_WIN:
@@ -739,7 +756,17 @@ class App:
                      name, notify=True)
             self.state["active"] = None
             self.save_state()
+        was_killed = False
+        if (self.state.get("running_by") or {}).get(USER) and not resume:
+            was_killed = True                   # كان شغال وما انقفل بالرمز ولا طلع من الحساب
+        if was_killed:
+            self.log("killed", f"⚠️ البرنامج انقفل في حساب {self.linked_player() or USER} بدون رمز الكبير (أو الجهاز انطفى فجأة). رجع اشتغل الحين",
+                     self.linked_player(), admin=True)
+        self.state_op(lambda st: (st.setdefault("running_by", {}).__setitem__(USER, True),
+                                  st.setdefault("closed_by", {}).pop(USER, None)))
         self.log("app_start", "تشغّل البرنامج")
+        if IS_WIN:
+            threading.Thread(target=set_watchdog, daemon=True).start()
         if IS_WIN and self.cfg.get("autostart"):
             try:
                 set_autostart(True)   # نتأكد إن التشغيل التلقائي يأشر على المكان الصحيح
@@ -933,7 +960,7 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_fb", "say_shown") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_fb", "say_shown", "running_by", "closed_by") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
@@ -2097,6 +2124,10 @@ class App:
         else:
             self.save_state()
         self.publish_status(force=True, sync=True)   # جوال الكبير يعرف إنه وقف يلعب
+        try:
+            self.state_op(lambda st: st.setdefault("running_by", {}).__setitem__(USER, False))
+        except Exception:
+            pass
 
     def lock_now(self):
         name = self.active
@@ -2913,6 +2944,8 @@ class App:
         self.log("app_exit", "الكبير قفل البرنامج", notify=True)
         self.state["active"] = None
         self.save_state()
+        self.state_op(lambda st: (st.setdefault("running_by", {}).__setitem__(USER, False),
+                                  st.setdefault("closed_by", {}).__setitem__(USER, time.time())))
         self.root.after(800, self.root.destroy)  # نعطي التيليجرام فرصة
 
     def run(self):
@@ -2957,6 +2990,12 @@ def install_self():
 
 
 def main():
+    if "--watchdog" in sys.argv:
+        st = load_json(STATE_PATH, {})
+        if (st.get("closed_by") or {}).get(USER):
+            return                         # الكبير سكّره بالرمز: ما نرجّعه لين يدخل الحساب من جديد
+        if not session_active():
+            return
     if install_self():
         return
     # نسخة وحدة بس من البرنامج
