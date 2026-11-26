@@ -31,9 +31,9 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 53
-CHANGES = ("لو أحد سكّر البرنامج بدون رمز الكبير (مثلاً من مدير المهام): يرجع يشتغل بروحه خلال دقيقة،\n"
-           "ويرن جوال الكبير «⚠️ البرنامج انقفل».")
+VERSION = 54
+CHANGES = ("نسخة احتياطية تلقائية في القاعدة: لو أحد حذف ملفات البرنامج، يرجع كل شي بروحه (حتى الرمز).\n"
+           "زر «♻️ استرجاع» في الإعدادات. وتصليح غلط كان ممكن يمسح الإعدادات.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -114,19 +114,54 @@ DEFAULT_CONFIG = {
 
 # ---------------------------------------------------------------- storage
 
-def load_json(path, default):
+class Unreadable(Exception):
+    """الملف موجود بس ما قدرنا نقراه (مشغول أو خربان): لا نكتب فوقه الافتراضي أبداً"""
+
+
+def read_json_strict(path, tries=10):
+    """يرجع محتوى الملف، أو None لو الملف مو موجود. لو موجود وما انقرى (بعد محاولات) يرمي Unreadable"""
+    last = None
+    for i in range(tries):
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as ex:          # ويندوز: ملف مشغول لحظة الحفظ من حساب ثاني، أو مضاد الفيروسات
+            last = ex
+            time.sleep(0.1 + 0.05 * i)
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path + ".bak", "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
+        raise Unreadable(str(last))
+
+
+def load_json(path, default):
+    try:
+        v = read_json_strict(path, tries=3)
+        return copy.deepcopy(default) if v is None else v
+    except Unreadable:
         return copy.deepcopy(default)
 
 
-def save_json(path, data):
+def save_json(path, data, backup=False):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    for i in range(20):
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:          # حساب ثاني يقرا الملف هاللحظة
+            time.sleep(0.05 * (i + 1))
+    else:
+        os.replace(tmp, path)
+    if backup:
+        try:
+            shutil.copyfile(path, path + ".bak")
+        except Exception:
+            pass
 
 
 def new_topic():
@@ -444,17 +479,66 @@ def screen_shot(width=720):
         return None
 
 
-def load_config():
-    cfg = load_json(CONFIG_PATH, DEFAULT_CONFIG)
+def machine_id():
+    """رقم ثابت للجهاز من ويندوز (ما يتغير لو انحذفت ملفات البرنامج)"""
+    if IS_WIN:
+        try:
+            import winreg
+            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0,
+                               winreg.KEY_READ | 0x0100)
+            return str(winreg.QueryValueEx(k, "MachineGuid")[0])
+        except Exception:
+            pass
+    return socket.gethostname()
+
+
+def backup_path():
+    return "r/waqti-backup-" + hashlib.sha256(("waqti-backup:" + machine_id()).encode()).hexdigest()[:32]
+
+
+BACKUP_STATE_KEYS = ("date", "used", "bonus", "nobody", "round", "blocked", "penalty", "open", "skipped",
+                     "week", "week_id", "finished_at", "round_announced")
+DEFAULT_NAMES = [p["name"] for p in DEFAULT_CONFIG["players"]]
+
+
+def looks_default(cfg):
+    return ([p.get("name") for p in cfg.get("players", [])] == DEFAULT_NAMES
+            and cfg.get("admin_pin") == DEFAULT_CONFIG["admin_pin"])
+
+
+def load_config(fallback=None):
+    """الإعدادات. لو الملف موجود وما انقرى: نرجع آخر نسخة عندنا ولا نكتب فوقه (قبل كان يرجع الإعدادات الافتراضية ويمسح كل شي)"""
+    try:
+        cfg = read_json_strict(CONFIG_PATH)
+    except Unreadable:
+        if fallback is not None:
+            return fallback
+        cfg = None
+        for _ in range(50):              # أول تشغيل: ننتظر لين ينقرى
+            time.sleep(0.2)
+            try:
+                cfg = read_json_strict(CONFIG_PATH)
+                break
+            except Unreadable:
+                pass
+        if cfg is None and os.path.exists(CONFIG_PATH):
+            raise
+    fresh = cfg is None
+    cfg = copy.deepcopy(DEFAULT_CONFIG) if fresh else cfg
+    changed = fresh
     for k, v in DEFAULT_CONFIG.items():
-        cfg.setdefault(k, copy.deepcopy(v))
-    if not cfg.get("ntfy_topic"):
-        cfg["ntfy_topic"] = new_topic()
-    if not cfg.get("sign_key"):
-        cfg["sign_key"] = secrets.token_hex(32)
-    if not cfg.get("admin_topic"):
-        cfg["admin_topic"] = "waqti-admin-" + secrets.token_hex(6)
-    save_json(CONFIG_PATH, cfg)
+        if k not in cfg:
+            cfg[k] = copy.deepcopy(v)
+            changed = True
+    for k, make in (("ntfy_topic", new_topic), ("sign_key", lambda: secrets.token_hex(32)),
+                    ("admin_topic", lambda: "waqti-admin-" + secrets.token_hex(6))):
+        if not cfg.get(k):
+            cfg[k] = make()
+            changed = True
+    if fresh:
+        cfg["_fresh"] = True             # انصنعت الحين: نشيك على النسخة الاحتياطية في القاعدة
+    if changed:
+        save_json(CONFIG_PATH, cfg, backup=True)
     return cfg
 
 
@@ -735,6 +819,9 @@ class App:
         self.root = tk.Tk()
         self.root.title("وقتي")
         self.cfg = load_config()
+        self._restored = None
+        if self.cfg.pop("_fresh", None) or looks_default(self.cfg):
+            self._restored = self.restore_from_backup()
         self.state = {}
         self.base = {}
         self.free = False
@@ -765,6 +852,9 @@ class App:
         self.state_op(lambda st: (st.setdefault("running_by", {}).__setitem__(USER, True),
                                   st.setdefault("closed_by", {}).pop(USER, None)))
         self.log("app_start", "تشغّل البرنامج")
+        if self._restored:
+            self.log("restored", "♻️ ملفات البرنامج انحذفت أو خربت، ورجّعت كل شي من النسخة الاحتياطية"
+                     + (" (حتى الأوقات)" if self._restored == "all" else ""), None, admin=True)
         if IS_WIN:
             threading.Thread(target=set_watchdog, daemon=True).start()
         if IS_WIN and self.cfg.get("autostart"):
@@ -937,7 +1027,10 @@ class App:
 
     # ---------- data
     def _disk_state(self):
-        st = load_json(STATE_PATH, {})
+        try:
+            st = read_json_strict(STATE_PATH) or {}
+        except Unreadable:               # مشغول/خربان: نكمل من آخر نسخة عندنا بدل ما نصفّر الأوقات
+            st = copy.deepcopy(getattr(self, "base", None) or {})
         st.setdefault("active_by", {})
         st.setdefault("resume_by", {})
         for k in ("active", "resume"):          # من النسخ القديمة
@@ -981,7 +1074,7 @@ class App:
             if op:
                 op(disk)
             if mine or disk.get("date") or op:
-                save_json(STATE_PATH, disk)
+                save_json(STATE_PATH, disk, backup=True)
         self.base = copy.deepcopy(disk)
         st = copy.deepcopy(disk)
         st["active"] = st["active_by"].get(USER)
@@ -991,8 +1084,128 @@ class App:
     def save_state(self):
         self.sync_state()
 
+    def restore_from_backup(self):
+        """لو أحد حذف ملفات البرنامج: نرجّع الإعدادات (والأوقات لو نفس اليوم) من النسخة اللي في القاعدة"""
+        try:
+            d = fb_req("GET", backup_path(), timeout=8)
+            data = json.loads(d["m"]) if d and d.get("m") else None
+        except Exception:
+            return None
+        cfg = (data or {}).get("cfg")
+        if not cfg or looks_default(cfg) or not cfg.get("players"):
+            return None
+        self.cfg = cfg
+        save_json(CONFIG_PATH, self.cfg, backup=True)
+        st = data.get("state") or {}
+        h = int(cfg.get("day_start_hour", 4))
+        today = (datetime.datetime.now() - datetime.timedelta(hours=h)).date().isoformat()
+        if st.get("date") == today:
+            def op(disk):
+                for k in BACKUP_STATE_KEYS:
+                    if k in st:
+                        disk[k] = st[k]
+            with file_lock():
+                disk = load_json(STATE_PATH, {})
+                op(disk)
+                save_json(STATE_PATH, disk, backup=True)
+            return "all"
+        return "cfg"
+
+    def backup_soon(self, delay=3000):
+        """نسخة احتياطية في القاعدة (بعد ثواني، ومرة وحدة لو صار أكثر من تغيير)"""
+        if getattr(self, "_bk_pending", False):
+            return
+        self._bk_pending = True
+
+        def go():
+            self._bk_pending = False
+            cfg = {k: v for k, v in self.cfg.items() if not k.startswith("_")}
+            if looks_default(cfg):
+                return                       # ما نكتب إعدادات افتراضية فوق النسخة الزينة
+            st = {k: self.state.get(k) for k in BACKUP_STATE_KEYS if k in self.state}
+            key_c = hashlib.sha256(json.dumps(cfg, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            key_s = hashlib.sha256(json.dumps(st, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            last = getattr(self, "_bk_last", ("", "", 0))
+            if key_c == last[0] and (key_s == last[1] or time.time() - last[2] < 60):
+                return                       # الأوقات وحدها: مرة بالدقيقة بالكثير
+            self._bk_last = (key_c, key_s, time.time())
+            body = json.dumps({"v": 1, "cfg": cfg, "state": st, "user": USER}, ensure_ascii=False)
+
+            def run():
+                try:
+                    fb_req("PUT", backup_path(), fb_entry(body), timeout=20)
+                except Exception:
+                    self._bk_last = ("", "", 0)
+            threading.Thread(target=run, daemon=True).start()
+        try:
+            self.root.after(delay, go)
+        except Exception:
+            self._bk_pending = False
+
+    def restore_from_link(self):
+        """استرجاع يدوي: كود رابط المنظم + الرمز القديم ← اللاعبين والإعدادات والرمز من القاعدة"""
+        v, vals = self.ask("♻️ استرجاع الإعدادات",
+                           "لو انمسحت الإعدادات: اكتب الكود اللي في رابطك (بعد waqti-admin-) أو الصق الرابط كامل،\n"
+                           "واكتب رمزك القديم. يرجع اللاعبين وأوقاتهم وحساباتهم والإعدادات ورمزك.",
+                           [("استرجع", True), ("إلغاء", None)],
+                           fields=[("الكود أو الرابط", "", False), ("رمزك القديم", "", True)])
+        if not v:
+            return
+        text, oldpin = vals[0].strip(), vals[1]
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(text).query) if "?" in text else {}
+        admin = (q.get("a") or [text])[0].strip()
+        if not admin.startswith("waqti-admin-"):
+            admin = "waqti-admin-" + admin
+        if not re.fullmatch(r"waqti-admin-[0-9a-z]{6,40}", admin) or not oldpin.strip():
+            self.info("خطأ", "اكتب الكود (مثل 6203d8dcdc2f) ورمزك القديم.")
+            return
+        try:
+            r = fb_req("GET", fb_path(admin + "-roster"), timeout=15)
+            info = json.loads(r["m"]) if r and r.get("m") else None
+            oks = fb_items(fb_req("GET", fb_path(admin + "-ok"), timeout=15))
+        except Exception as ex:
+            self.info("ما قدرت", f"تأكد من النت.\n{ex}")
+            return
+        if not info or not info.get("players"):
+            self.info("ما لقيت شي", "ما لقيت إعدادات محفوظة بهالكود. تأكد منه.")
+            return
+        ph = hash_pin(oldpin)
+        cmds = []
+        for _, m, _t in oks:
+            try:
+                cmds.append(json.loads(m))
+            except Exception:
+                pass
+        signed = [d for d in cmds if d.get("p") and d.get("cmd")]
+        good = any(d.get("p") == hashlib.sha256((ph + f"{d['cmd']}|{d.get('who', '')}|{d.get('ts', '')}").encode()).hexdigest()
+                   for d in signed)
+        if signed and not good:
+            self.log("restore_fail", "⚠️ أحد حاول يسترجع الإعدادات برمز غلط", None, admin=True)
+            self.info("الرمز غلط", "رمزك القديم مو صحيح.")
+            return
+        self.cfg["admin_topic"] = admin
+        if q.get("t"):
+            self.cfg["ntfy_topic"] = q["t"][0]
+        self.cfg["admin_pin"] = ph
+        self.cfg["players"] = [{"name": p["name"], "daily_minutes": int(p.get("mins", 120)), "pin": "",
+                                "windows_user": p.get("win", "")} for p in info["players"]]
+        for k, val in (info.get("settings") or {}).items():
+            if k in DEFAULT_CONFIG and val is not None:
+                self.cfg[k] = val
+        self.save_cfg()
+        self.publish_roster(force=True)
+        self.log("restored", "♻️ الكبير رجّع الإعدادات (اللاعبين والرمز) من القاعدة", None, admin=True)
+        self.info("رجع كل شي ✅",
+                  "رجعوا اللاعبين وأوقاتهم وحساباتهم والإعدادات، ورمزك رجع زي ما كان.\n\n"
+                  "• رموز اللاعبين انمسحت: حطها من جديد (الإعدادات ← تعديل).\n"
+                  "• رابط الإخوان تغيّر: أرسله لهم من «رابط الإشعارات».\n"
+                  "• حدّث رابطك في تطبيق الجوال (ضغطة طويلة ← تغيير الرابط) من النافذة الجاية.")
+        self.show_admin_channel()
+
     def save_cfg(self):
-        save_json(CONFIG_PATH, self.cfg)
+        self.cfg.pop("_fresh", None)
+        save_json(CONFIG_PATH, self.cfg, backup=True)
+        self.backup_soon()
 
     def log(self, kind, text, player=None, notify=False, admin=False):
         e = {"t": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -2425,7 +2638,8 @@ class App:
                 if self.save_tick >= 10:      # حساب الكبير: نتزامن ونرسل الحالة للمنظم بس
                     self.save_tick = 0
                     self.save_state()
-                    self.cfg = load_config()
+                    self.cfg = load_config(self.cfg)
+                    self.backup_soon(0)
                     self.publish_roster()
                     self.publish_status()
                     self.check_week()
@@ -2473,10 +2687,11 @@ class App:
                 self.save_tick = 0
                 self.save_state()
                 if not self.active and not self.dialogs:
-                    self.cfg = load_config()
+                    self.cfg = load_config(self.cfg)
                     self.refresh_lock()
                 self.publish_roster()
                 self.publish_status()
+                self.backup_soon(0)
                 self.check_week()
         except Exception as ex:  # ما نبي البرنامج يطيح
             print("tick error:", ex)
@@ -2844,6 +3059,7 @@ class App:
         if IS_WIN:
             btn(bb, "تشغيل لكل الحسابات", self.autostart_all, bg=BG).pack(side="right", padx=4)
         btn(bb, "تغيير رمز الكبير", change_admin_pin, bg=BG).pack(side="right", padx=4)
+        btn(bb, "♻️ استرجاع", lambda: (close(), self.restore_from_link()), bg=BG).pack(side="right", padx=4)
         btn(bb, "إلغاء", close, bg=DIM).pack(side="left", padx=4)
 
         s.update_idletasks()
