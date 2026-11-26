@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 55
-CHANGES = ("جديد: زر «🔒 منع حذف الملفات» في الإعدادات: بعده ما أحد يقدر يحذف ملفات البرنامج.")
+VERSION = 56
+CHANGES = ("✨ شكل جديد لشاشة القفل والعداد. تبي القديم؟ زر «الشكل القديم» فوق يسار.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -81,6 +81,14 @@ GOOD = "#16a34a"
 WARN = "#d97706"
 BAD = "#dc2626"
 DIM = "#475569"
+NBG = "#0b1220"         # الشكل الجديد
+NCARD = "#131c30"
+NCARD2 = "#0f172a"
+NLINE = "#22304a"
+NBLUE = "#60a5fa"
+NGREEN = "#34d399"
+NRED = "#f87171"
+NAMBER = "#fbbf24"
 
 KEEP = "(بدون تغيير)"
 TEXT_KEYS = ("telegram_token", "telegram_chat_id", "free_accounts")
@@ -980,6 +988,9 @@ class App:
         self.free = True
         r = self.root
         self.lock_frame.place_forget()
+        if self.look_btn is not None:
+            self.look_btn.place_forget()
+        r.configure(bg=BG)
         r.overrideredirect(False)
         r.attributes("-topmost", False)
         r.title("وقتي")
@@ -1018,7 +1029,7 @@ class App:
         r.overrideredirect(True)
         r.attributes("-topmost", True)
         r.protocol("WM_DELETE_WINDOW", lambda: None)
-        self.lock_frame.place(relx=0.5, rely=0.45, anchor="center")
+        self.build_lock()
         self.show_lock()
 
     def logoff(self):
@@ -1462,35 +1473,109 @@ class App:
         r.protocol("WM_SAVE_YOURSELF", self.on_logoff)   # ويندوز يرسلها لما يطلع من الحساب
         x, y, w, h = screen_geom(r)
         r.geometry(f"{w}x{h}+{x}+{y}")
+        self.lock_frame = None
+        self.look_btn = None
+        self.build_lock()
 
-        lf = self.lock_frame = tk.Frame(r, bg=BG)
-        lf.place(relx=0.5, rely=0.45, anchor="center")
-        tk.Label(lf, text="⏱  وقتي", font=(FONT, 42, "bold"), bg=BG, fg=FG).pack()
-        self.clock_lbl = tk.Label(lf, text="", font=(FONT, 16), bg=BG, fg=MUTED)
-        self.clock_lbl.pack(pady=(4, 0))
-        tk.Label(lf, text="مين بيلعب الحين؟", font=(FONT, 22, "bold"), bg=BG, fg=FG).pack(pady=(34, 12))
-        self.players_frame = tk.Frame(lf, bg=BG)
+    def look(self):
+        """الشكل: الجديد هو الأساس، واللي يضغط «الشكل القديم» يبقى عليه (لكل حساب ويندوز)"""
+        return (self.cfg.get("looks") or {}).get(USER, "new")
+
+    def toggle_look(self):
+        new = "old" if self.look() == "new" else "new"
+        self.cfg.setdefault("looks", {})[USER] = new
+        self.save_cfg()
+        self.build_lock()
+        self.build_timer()
+        self.refresh_lock()
+        if self.active:
+            self.show_timer()
+
+    def build_lock(self):
+        r = self.root
+        if self.lock_frame is not None:
+            self.lock_frame.destroy()
+        if self.look_btn is not None:
+            self.look_btn.destroy()
+        new = self.look() == "new"
+        bg = NBG if new else BG
+        r.configure(bg=bg)
+        lf = self.lock_frame = tk.Frame(r, bg=bg)
+        lf.place(relx=0.5, rely=0.5 if new else 0.45, anchor="center")
+        self.look_btn = btn(r, "الشكل القديم" if new else "✨ الشكل الجديد", self.toggle_look,
+                            bg=NCARD if new else CARD, size=10)
+        self.look_btn.place(x=24, y=20)
+        if new:
+            tk.Label(lf, text="⏱  وقتي", font=(FONT, 20, "bold"), bg=bg, fg=FG).pack()
+            self.clock_lbl = tk.Label(lf, text="", font=(FONT, 38, "bold"), bg=bg, fg=FG)
+            self.clock_lbl.pack()
+            self.date_lbl = tk.Label(lf, text="", font=(FONT, 13), bg=bg, fg=MUTED)
+            self.date_lbl.pack()
+            tk.Label(lf, text="مين بيلعب الحين؟", font=(FONT, 18, "bold"), bg=bg, fg=FG).pack(pady=(14, 10))
+        else:
+            self.date_lbl = None
+            tk.Label(lf, text="⏱  وقتي", font=(FONT, 42, "bold"), bg=bg, fg=FG).pack()
+            self.clock_lbl = tk.Label(lf, text="", font=(FONT, 16), bg=bg, fg=MUTED)
+            self.clock_lbl.pack(pady=(4, 0))
+            tk.Label(lf, text="مين بيلعب الحين؟", font=(FONT, 22, "bold"), bg=bg, fg=FG).pack(pady=(34, 12))
+        self.players_frame = tk.Frame(lf, bg=bg)
         self.players_frame.pack()
-        self.round_lbl = tk.Label(lf, text="", font=(FONT, 13), bg=BG, fg=MUTED)
-        self.round_lbl.pack(pady=(6, 0))
+        self.round_lbl = tk.Label(lf, text="", font=(FONT, 13), bg=bg, fg=MUTED)
+        self.round_lbl.pack(pady=(10 if new else 6, 0))
 
-        bottom = tk.Frame(lf, bg=BG)
-        bottom.pack(pady=(26, 0))
-        btn(bottom, "السجل", self.open_log, bg=CARD).pack(side="right", padx=6)
-        btn(bottom, "ريست الوقت", lambda: self.reset_flow(), bg=CARD).pack(side="right", padx=6)
-        btn(bottom, "ريست الدور", lambda: self.reset_flow(kind="round"), bg=CARD).pack(side="right", padx=6)
-        btn(bottom, "الإعدادات", self.open_settings, bg=CARD).pack(side="right", padx=6)
-        btn(bottom, "إغلاق البرنامج", self.exit_app, bg=CARD).pack(side="right", padx=6)
+        bottom = tk.Frame(lf, bg=bg)
+        bottom.pack(pady=(16 if new else 26, 0))
+        bb = NCARD if new else CARD
+        btn(bottom, "السجل", self.open_log, bg=bb).pack(side="right", padx=6)
+        btn(bottom, "ريست الوقت", lambda: self.reset_flow(), bg=bb, fg=NBLUE if new else FG).pack(side="right", padx=6)
+        btn(bottom, "ريست الدور", lambda: self.reset_flow(kind="round"), bg=bb, fg=NBLUE if new else FG).pack(side="right", padx=6)
+        btn(bottom, "الإعدادات", self.open_settings, bg=bb).pack(side="right", padx=6)
+        btn(bottom, "إغلاق البرنامج", self.exit_app, bg=bb).pack(side="right", padx=6)
         if IS_WIN:
-            btn(bottom, "تسجيل خروج من ويندوز", self.logoff, bg=CARD).pack(side="right", padx=6)
-        self.elder_btn = btn(bottom, "👑 أنا الكبير", self.elder_enter, bg=CARD)
+            btn(bottom, "تسجيل خروج من ويندوز", self.logoff, bg=bb).pack(side="right", padx=6)
+        self.elder_btn = btn(bottom, "👑 أنا الكبير", self.elder_enter, bg=bb)
 
-        tk.Label(lf, text="آخر الأحداث (الكل يشوفها)", font=(FONT, 13, "bold"), bg=BG,
-                 fg=MUTED).pack(pady=(30, 6))
-        self.recent_lbl = tk.Label(lf, text="", font=(FONT, 12), bg=BG, fg=MUTED, justify="right")
-        self.recent_lbl.pack()
-        self.link_lbl = tk.Label(lf, text="", font=(FONT, 11), bg=BG, fg=MUTED)
-        self.link_lbl.pack(pady=(18, 0))
+        if new:
+            box = tk.Frame(lf, bg=NCARD, highlightthickness=1, highlightbackground=NLINE, padx=22, pady=14)
+            box.pack(pady=(18, 0), fill="x")
+            head = tk.Frame(box, bg=NCARD)
+            head.pack(fill="x")
+            tk.Label(head, text="آخر الأحداث", font=(FONT, 14, "bold"), bg=NCARD, fg=FG).pack(side="right")
+            tk.Label(head, text="الكل يشوفها", font=(FONT, 10), bg=NCARD, fg=MUTED).pack(side="left")
+            self.recent_box = tk.Frame(box, bg=NCARD)
+            self.recent_box.pack(fill="x", pady=(8, 0))
+            self.recent_lbl = None
+        else:
+            self.recent_box = None
+            tk.Label(lf, text="آخر الأحداث (الكل يشوفها)", font=(FONT, 13, "bold"), bg=bg,
+                     fg=MUTED).pack(pady=(30, 6))
+            self.recent_lbl = tk.Label(lf, text="", font=(FONT, 12), bg=bg, fg=MUTED, justify="right")
+            self.recent_lbl.pack()
+        self.link_lbl = tk.Label(lf, text="", font=(FONT, 10 if new else 11), bg=bg, fg=MUTED)
+        self.link_lbl.pack(pady=(10 if new else 18, 0))
+        self.clock_lbl.configure(text=now_hm())
+
+    def player_card(self, parent, p, status, color, frac, active):
+        """بطاقة لاعب بالشكل الجديد: دائرة بأول حرف، الاسم، الحالة، وشريط الوقت"""
+        name = p["name"]
+        border = color if active else NLINE
+        c = tk.Frame(parent, bg=NCARD, highlightthickness=2, highlightbackground=border, cursor="hand2",
+                     padx=18, pady=14)
+        av = tk.Canvas(c, width=58, height=58, bg=NCARD, highlightthickness=0, cursor="hand2")
+        av.create_oval(2, 2, 56, 56, fill=color, outline="")
+        av.create_text(29, 30, text=name[:1], font=(FONT, 20, "bold"), fill=NBG)
+        av.pack()
+        tk.Label(c, text=name, font=(FONT, 16, "bold"), bg=NCARD, fg=FG if color != DIM else MUTED,
+                 cursor="hand2").pack(pady=(6, 0))
+        tk.Label(c, text=status, font=(FONT, 11), bg=NCARD, fg=color if color != DIM else MUTED, width=20,
+                 cursor="hand2").pack()
+        bar = tk.Canvas(c, width=190, height=8, bg=NLINE, highlightthickness=0, cursor="hand2")
+        bar.pack(pady=(10, 0))
+        if frac > 0:
+            bar.create_rectangle(190 - int(190 * min(1, frac)), 0, 190, 8, fill=color, outline="")
+        for w in (c, av, bar, *c.winfo_children()):
+            w.bind("<Button-1>", lambda e, n=name: self.choose_player(n))
+        return c
 
     def refresh_lock(self):
         for w in self.players_frame.winfo_children():
@@ -1522,6 +1607,14 @@ class App:
                 txt, color = f'{p["name"]}\nباقي {fmt(rem)}', ACCENT
             else:
                 txt, color = f'{p["name"]}\nخلص وقته', DIM
+            if self.look() == "new":
+                daily = max(1, int(p.get("daily_minutes", 0)) * 60 + self.state["bonus"].get(p["name"], 0))
+                frac = (max(0, rem) / daily) if color in (ACCENT, GOOD) else 0
+                ncol = {ACCENT: NBLUE, GOOD: NGREEN, BAD: NRED, WARN: NAMBER}.get(color, DIM)
+                b = self.player_card(self.players_frame, p, txt.split("\n", 1)[1], ncol, frac,
+                                     active=color in (ACCENT, GOOD, BAD, WARN))
+                b.grid(row=i // cols, column=cols - 1 - (i % cols), padx=12, pady=10)
+                continue
             b = btn(self.players_frame, txt, lambda n=p["name"]: self.choose_player(n),
                     bg=color, size=16, width=12)
             b.grid(row=i // cols, column=cols - 1 - (i % cols), padx=10, pady=10)
@@ -1546,7 +1639,29 @@ class App:
             lines.append(f"{txt}   {entry_time(e)}")
             if len(lines) == 6:
                 break
-        self.recent_lbl.configure(text="\n".join(lines) or "ما فيه أحداث")
+        if self.recent_box is not None:
+            for w in self.recent_box.winfo_children():
+                w.destroy()
+            for e in [e for e in read_log(30) if e.get("kind") not in hide][:4]:
+                t = e["text"] if len(e["text"]) <= 80 else e["text"][:78] + "…"
+                k = (NRED if re.search("⛔|🔒|❌|🚫", t) else NAMBER if re.search("⚠️|⏰|⚖️", t)
+                     else NGREEN if "✅" in t else NBLUE)
+                t = re.sub(r"^(⛔|🔒|❌|🚫|⚠️|⏰|⚖️|✅|🔄|📨|♻️|🎮|🚪|💬|👍|👎)\s*", "", t)
+                row = tk.Frame(self.recent_box, bg=NCARD)
+                row.pack(fill="x", pady=2)
+                tk.Label(row, text="●", font=(FONT, 10), bg=NCARD, fg=k).pack(side="right", padx=(0, 0))
+                tk.Label(row, text=t, font=(FONT, 12), bg=NCARD, fg=FG).pack(side="right", padx=8)
+                tk.Label(row, text=entry_time(e), font=(FONT, 11), bg=NCARD, fg=MUTED).pack(side="left", padx=(0, 40))
+            if not self.recent_box.winfo_children():
+                tk.Label(self.recent_box, text="ما فيه أحداث", font=(FONT, 12), bg=NCARD, fg=MUTED).pack()
+        else:
+            self.recent_lbl.configure(text="\n".join(lines) or "ما فيه أحداث")
+        if getattr(self, "date_lbl", None) is not None:
+            d = datetime.datetime.now()
+            days = ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
+            months = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر",
+                      "أكتوبر", "نوفمبر", "ديسمبر"]
+            self.date_lbl.configure(text=f"{days[d.weekday()]} {d.day} {months[d.month - 1]}")
         if NET["err_at"] > NET["ok_at"]:
             net = f"❌ الإشعارات ما توصل: {NET['err']}"
         elif NET["ok_at"]:
@@ -2511,30 +2626,69 @@ class App:
 
     # ---------- timer window
     def setup_timer_window(self):
-        t = self.timer = tk.Toplevel(self.root)
-        t.overrideredirect(True)
-        t.attributes("-topmost", True)
-        t.configure(bg=CARD, highlightthickness=2, highlightbackground=ACCENT)
-        t.protocol("WM_DELETE_WINDOW", lambda: None)
-        self.t_name = tk.Label(t, text="", font=(FONT, 12, "bold"), bg=CARD, fg=FG)
-        self.t_name.pack(pady=(8, 0), padx=16)
-        self.t_status = tk.Label(t, text="", font=(FONT, 10), bg=CARD, fg=MUTED)
-        self.t_status.pack()
-        self.t_time = tk.Label(t, text="", font=(FONT, 28, "bold"), bg=CARD, fg=GOOD)
-        self.t_time.pack(padx=16)
-        row = tk.Frame(t, bg=CARD)
-        row.pack(pady=(4, 10), padx=10)
-        btn(row, "إنهاء", self.end_session_ask, bg=DIM, size=10).pack(side="right", padx=3)
-        btn(row, "إخفاء", self.hide_timer, bg=DIM, size=10).pack(side="left", padx=3)
+        self.timer = None
         self.timer_hidden = False
         self.f1_pressed = False
         start_key_hook(lambda: setattr(self, "f1_pressed", True))
-        btn(row, "وقت إضافي", lambda: self.active and self.extension_flow(self.active),
-            bg=ACCENT, size=10).pack(side="right", padx=3)
-        for w in (t, self.t_name, self.t_status, self.t_time):
+        self.build_timer()
+
+    def build_timer(self):
+        old = self.timer
+        new = self.look() == "new"
+        bg = NCARD2 if new else CARD
+        t = self.timer = tk.Toplevel(self.root)
+        t.overrideredirect(True)
+        t.attributes("-topmost", True)
+        t.configure(bg=bg, highlightthickness=2, highlightbackground=NLINE if new else ACCENT)
+        t.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.t_av = self.t_bar = self.t_end = None
+        if new:
+            top = tk.Frame(t, bg=bg)
+            top.pack(fill="x", padx=16, pady=(12, 0))
+            self.t_av = tk.Canvas(top, width=36, height=36, bg=bg, highlightthickness=0)
+            self.t_av.pack(side="right")
+            names = tk.Frame(top, bg=bg)
+            names.pack(side="right", padx=10)
+            self.t_name = tk.Label(names, text="", font=(FONT, 13, "bold"), bg=bg, fg=FG)
+            self.t_name.pack(anchor="e")
+            self.t_status = tk.Label(names, text="", font=(FONT, 9), bg=bg, fg=MUTED)
+            self.t_status.pack(anchor="e")
+            self.t_time = tk.Label(t, text="", font=(FONT, 32, "bold"), bg=bg, fg=NGREEN)
+            self.t_time.pack(padx=16, pady=(4, 2))
+            self.t_bar = tk.Canvas(t, width=230, height=7, bg=NLINE, highlightthickness=0)
+            self.t_bar.pack(padx=16)
+            self.t_end = tk.Label(t, text="", font=(FONT, 9), bg=bg, fg=MUTED)
+            self.t_end.pack(pady=(4, 0))
+            row = tk.Frame(t, bg=bg)
+            row.pack(pady=(8, 12), padx=12)
+            btn(row, "إنهاء", self.end_session_ask, bg=NLINE, size=10).pack(side="right", padx=3)
+            btn(row, "وقت إضافي", lambda: self.active and self.extension_flow(self.active),
+                bg=ACCENT, size=10).pack(side="right", padx=3)
+            btn(row, "إخفاء", self.hide_timer, bg=NLINE, size=10).pack(side="right", padx=3)
+            drag = (t, top, names, self.t_name, self.t_status, self.t_time, self.t_end, self.t_av)
+        else:
+            self.t_name = tk.Label(t, text="", font=(FONT, 12, "bold"), bg=CARD, fg=FG)
+            self.t_name.pack(pady=(8, 0), padx=16)
+            self.t_status = tk.Label(t, text="", font=(FONT, 10), bg=CARD, fg=MUTED)
+            self.t_status.pack()
+            self.t_time = tk.Label(t, text="", font=(FONT, 28, "bold"), bg=CARD, fg=GOOD)
+            self.t_time.pack(padx=16)
+            row = tk.Frame(t, bg=CARD)
+            row.pack(pady=(4, 10), padx=10)
+            btn(row, "إنهاء", self.end_session_ask, bg=DIM, size=10).pack(side="right", padx=3)
+            btn(row, "إخفاء", self.hide_timer, bg=DIM, size=10).pack(side="left", padx=3)
+            btn(row, "وقت إضافي", lambda: self.active and self.extension_flow(self.active),
+                bg=ACCENT, size=10).pack(side="right", padx=3)
+            drag = (t, self.t_name, self.t_status, self.t_time)
+        for w in drag:
             w.bind("<ButtonPress-1>", self._drag_start)
             w.bind("<B1-Motion>", self._drag_move)
         t.withdraw()
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
 
     def _drag_start(self, e):
         self._dx, self._dy = e.x_root - self.timer.winfo_x(), e.y_root - self.timer.winfo_y()
@@ -2565,6 +2719,20 @@ class App:
         self.timer.geometry(f"+{sw - self.timer.winfo_reqwidth() - 24}+24")
         self.timer.lift()
 
+    def _timer_extras(self, color, frac, end_text):
+        if self.t_av is None:
+            return
+        nc = {GOOD: NGREEN, WARN: NAMBER, BAD: NRED}.get(color, color)
+        self.t_time.configure(fg=nc)
+        self.t_av.delete("all")
+        self.t_av.create_oval(1, 1, 35, 35, fill=nc, outline="")
+        self.t_av.create_text(18, 19, text=(self.active or " ")[:1], font=(FONT, 13, "bold"), fill=NBG)
+        self.t_bar.delete("all")
+        if frac > 0:
+            self.t_bar.create_rectangle(230 - int(230 * min(1, frac)), 0, 230, 7, fill=nc, outline="")
+        self.t_end.configure(text=end_text)
+        self.timer.configure(highlightbackground=NRED if color == BAD else NLINE)
+
     def update_timer_ui(self):
         if not self.active:
             return
@@ -2574,6 +2742,7 @@ class App:
             self.t_status.configure(text="وقت مفتوح (ما أحد صاحي) · له")
             self.t_time.configure(text=fmt(time.time() - started), fg=WARN)
             self.timer.configure(highlightbackground=WARN)
+            self._timer_extras(WARN, 1, "يوقف لما تضغط «إنهاء» أو تطلع")
             return
         if self.grace_left is None:
             rem = self.remaining(self.active)
@@ -2581,11 +2750,19 @@ class App:
             color = WARN if warn else GOOD
             self.t_status.configure(text="باقي من وقتك اليوم")
             self.t_time.configure(text=fmt(rem), fg=color)
+            p = self.player(self.active)
+            daily = max(1, int(p["daily_minutes"]) * 60 + self.state["bonus"].get(self.active, 0)) if p else 1
+            end = h12(datetime.datetime.now() + datetime.timedelta(seconds=max(0, rem)))
+            self.timer.configure(highlightbackground=color)
+            self._timer_extras(color, max(0, rem) / daily, f"ينتهي {end}")
+            return
         else:
             color = BAD
             self.t_status.configure(text="خلص وقتك! الجهاز بيتقفل بعد")
             self.t_time.configure(text=fmt(self.grace_left), fg=BAD)
         self.timer.configure(highlightbackground=color)
+        g = int(self.cfg.get("grace_minutes", 5)) * 60 or 1
+        self._timer_extras(color, (self.grace_left or 0) / g, "احفظ لعبتك")
 
     def toast(self, title, msg, color=WARN):
         beep()
