@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 56
-CHANGES = ("✨ شكل جديد لشاشة القفل والعداد. تبي القديم؟ زر «الشكل القديم» فوق يسار.")
+VERSION = 57
+CHANGES = ("جديد: «🎤 رسالة صوتية» من جوال الكبير: صوته يشتغل على الكمبيوتر مع «أوكي» و«لا».")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -437,7 +437,7 @@ def ntfy_poll(topic, since):
 def fb_cleanup(cfg):
     """نمسح القديم عشان القاعدة تبقى صغيرة: الردود بعد يوم، والأوامر والرسائل بعد 8 أيام"""
     now = time.time()
-    for topic, keep in ((cfg["admin_topic"] + "-ok", 8 * 86400), (cfg["admin_topic"] + "-res-x", 86400),
+    for topic, keep in ((cfg["admin_topic"] + "-ok", 8 * 86400), (cfg["admin_topic"] + "-res-x", 86400), (cfg["admin_topic"] + "-voice", 86400),
                         (cfg["admin_topic"], 8 * 86400), (cfg.get("ntfy_topic", ""), 8 * 86400)):
         if not topic:
             continue
@@ -954,6 +954,7 @@ class App:
                 self.start_session(me)          # دخل حسابه = يبدأ وقته على طول
         self.update_ready = None
         self.cmd_queue = []
+        self.ui_jobs = []
         self.cmd_since = time.time() - 60
         self.root.after(1000, self.tick)
         self.root.after(500, self.keep_on_top)
@@ -2097,6 +2098,8 @@ class App:
     def fast_cmds(self):
         """أوامر الجوال تتنفذ أول ما توصل (كل خُمس ثانية نشيك)"""
         try:
+            while getattr(self, "ui_jobs", None):
+                self.ui_jobs.pop(0)()
             if getattr(self, "reset_approved", None):
                 (kind, who), self.reset_approved = self.reset_approved, None
                 self.do_reset(kind, who, "بموافقة المنظم من الجوال")
@@ -2113,7 +2116,7 @@ class App:
         except Exception:
             return
         if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
-                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch", "cfg")) and d.get("id"):
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch", "cfg", "voice")) and d.get("id"):
             self.cmd_queue.append(d)
             return
         req = getattr(self, "pending_req", None)
@@ -2249,7 +2252,7 @@ class App:
                     except Exception:
                         continue
                     if (d.get("cmd") in ("kick", "allow", "reset_time", "reset_round", "set_pin", "logout")
-                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch", "cfg")) and d.get("id"):
+                or re.fullmatch(r"adjust:-?\d{1,4}", str(d.get("cmd"))) or d.get("cmd") in ("say", "watch", "cfg", "voice")) and d.get("id"):
                         self.cmd_queue.append(d)
             finally:
                 self._cmd_polling = False
@@ -2271,6 +2274,7 @@ class App:
         valid_target = (cmd == "reset_round" or (cmd == "set_pin" and re.fullmatch(r"[0-9a-f]{64}", who))
                         or (cmd == "say" and 0 < len(who.strip()) <= 300)
                         or cmd == "watch"
+                        or (cmd == "voice" and re.fullmatch(r"[a-z0-9]{4,20}:[0-9a-f]{64}", who))
                         or (cmd == "cfg" and len(who) < 3000)
                         or self.player(who))
         if not fresh or d.get("p") != good or not valid_target:
@@ -2285,7 +2289,7 @@ class App:
         h = int(self.cfg.get("day_start_hour", 4))
         sent_day = (datetime.datetime.fromtimestamp(int(ts) / 1000) - datetime.timedelta(hours=h)).date().isoformat()
         stale = ((cmd.startswith("adjust:") or cmd in ("reset_time", "reset_round")) and sent_day != self.today()) \
-            or (cmd in ("logout", "say") and age > 12 * 3600) \
+            or (cmd in ("logout", "say", "voice") and age > 12 * 3600) \
             or (cmd == "watch" and age > 120)
         if stale:                          # تعديل/ريست من يوم راح (أو خروج قديم): ما يتنفذ على اليوم الجديد
             if cid not in (self.state.get("cmds_done") or []):
@@ -2294,10 +2298,10 @@ class App:
                     done.append(cid)
                     del done[:-500]
                 self.state_op(op_old)
-                what = "تسجيل خروج" if cmd == "logout" else "رسالة للشاشة" if cmd == "say" else "شوف الشاشة" if cmd == "watch" else "ريست" if cmd.startswith("reset") else "تعديل وقت"
-                self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd not in ('reset_round', 'say', 'watch') else ''} من الجوال ما تنفذ: "
-                                        + ("الكمبيوتر كان طافي أو ما أحد قدامه" if cmd == "watch" else "انرسل والكمبيوتر طافي، وصار له أكثر من 12 ساعة" if cmd in ("logout", "say") else "انرسل والكمبيوتر طافي، وراح يومه"), who if self.player(who) else None, admin=True)
-                ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم وما تنفذ" if cmd in ("logout", "say", "watch") else "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
+                what = "تسجيل خروج" if cmd == "logout" else "رسالة للشاشة" if cmd == "say" else "رسالة صوتية" if cmd == "voice" else "شوف الشاشة" if cmd == "watch" else "ريست" if cmd.startswith("reset") else "تعديل وقت"
+                self.log("cmd_expired", f"⌛ أمر {what} {'لـ ' + who if cmd not in ('reset_round', 'say', 'watch', 'voice') else ''} من الجوال ما تنفذ: "
+                                        + ("الكمبيوتر كان طافي أو ما أحد قدامه" if cmd == "watch" else "انرسل والكمبيوتر طافي، وصار له أكثر من 12 ساعة" if cmd in ("logout", "say", "voice") else "انرسل والكمبيوتر طافي، وراح يومه"), who if self.player(who) else None, admin=True)
+                ntfy_admin_send(self.cfg, "وقتي", "⌛ الأمر قديم وما تنفذ" if cmd in ("logout", "say", "watch", "voice") else "⌛ الأمر قديم (راح يومه) وما تنفذ", topic=res_topic)
             return
         if cmd == "cfg":                   # الإعدادات من الجوال: كل نسخة شغالة تحدّث عندها (عشان ما ترجّع القديم)
             first = {}
@@ -2338,6 +2342,40 @@ class App:
             if shown.get("yes"):
                 ntfy_admin_send(self.cfg, "وقتي", "✅ البث بدأ", topic=res_topic)
                 self.watch_screen(cid)
+            return
+        if cmd == "voice":                 # رسالة صوتية من الكبير: نحملها ونشغلها، ونطلّع رسالة على الشاشة
+            if not session_active():
+                return
+            shown = {}
+
+            def op_v(st):
+                lst = st.setdefault("say_shown", [])
+                if cid not in lst:
+                    lst.append(cid)
+                    del lst[:-200]
+                    shown["yes"] = True
+            self.state_op(op_v)
+            if not shown.get("yes"):
+                return
+            vid, digest = who.split(":", 1)
+
+            def fetch():
+                try:
+                    d = fb_req("GET", fb_path(self.cfg["admin_topic"] + "-voice") + "/" + vid, timeout=30)
+                    b64 = (d or {}).get("m", "")
+                    if hashlib.sha256(b64.encode()).hexdigest() != digest:
+                        raise ValueError("الصوت ما وصل كامل")
+                    import base64
+                    import tempfile
+                    path = os.path.join(tempfile.gettempdir(), f"waqti-voice-{vid}.wav")
+                    with open(path, "wb") as f:
+                        f.write(base64.b64decode(b64))
+                    self.ui_jobs.append(lambda: self.show_say("🎤 رسالة صوتية من الكبير", cid, audio=path))
+                    ntfy_admin_send(self.cfg, "وقتي", "✅ اشتغل الصوت على الكمبيوتر", topic=res_topic)
+                    self.log("voice_cmd", "🎤 رسالة الكبير الصوتية اشتغلت على الكمبيوتر", self.active, admin=True)
+                except Exception as ex:
+                    ntfy_admin_send(self.cfg, "وقتي", f"❌ ما قدر يشغّل الصوت: {ex}", topic=res_topic)
+            threading.Thread(target=fetch, daemon=True).start()
             return
         if cmd == "say":                   # رسالة من الكبير تطلع على شاشة اللي قدام الكمبيوتر
             if not session_active():
@@ -2779,7 +2817,15 @@ class App:
         t.bind("<Button-1>", lambda e: t.destroy())
         t.after(8000, lambda: t.winfo_exists() and t.destroy())
 
-    def show_say(self, text, cid=""):
+    def play_voice(self, path):
+        if IS_WIN:
+            try:
+                import winsound
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            except Exception:
+                pass
+
+    def show_say(self, text, cid="", audio=None):
         """رسالة الكبير: كبيرة بوسط الشاشة مع «أوكي» و«لا» و20 ثانية للجواب.
         من أول ما تطلع لين يجاوب: الكبير يشوف الشاشة بث مباشر من جواله"""
         beep()
@@ -2806,13 +2852,19 @@ class App:
             except Exception:
                 pass
             txt = {"ok": f"👍 {who} جاوب: أوكي", "no": f"👎 {who} جاوب: لا",
-                   "none": f"⌛ ما أحد جاوب على رسالتك خلال 20 ثانية ({who})"}[a]
+                   "none": f"⌛ ما أحد جاوب على رسالتك خلال {live.get('total', 20)} ثانية ({who})"}[a]
             self.log("say_answer", txt + f" · الرسالة: {text}", self.active, admin=True)
         tk.Button(row, text="أوكي 👍", font=(FONT, 14, "bold"), command=lambda: answer("ok"), bg=GOOD, fg="white",
                   relief="flat", padx=22, pady=6).pack(side="right", padx=6)
         tk.Button(row, text="لا 👎", font=(FONT, 14, "bold"), command=lambda: answer("no"), bg=BAD, fg="white",
                   relief="flat", padx=22, pady=6).pack(side="right", padx=6)
+        if audio:
+            live["left"] = 40                   # وقت أطول عشان يسمع الرسالة
+            tk.Button(row, text="🔊 عيد", font=(FONT, 14, "bold"), command=lambda: self.play_voice(audio), bg=bg,
+                      fg="white", relief="flat", padx=16, pady=6).pack(side="right", padx=6)
+            self.play_voice(audio)
 
+        live["total"] = live["left"]
         def count():
             if live["ans"]:
                 return
@@ -2828,7 +2880,7 @@ class App:
         t.geometry(f"+{(sw - t.winfo_reqwidth()) // 2}+{(sh - t.winfo_reqheight()) // 3}")
         t.lift()
 
-        self.stream_screen(cid, live, who, text, "say", 26)
+        self.stream_screen(cid, live, who, text, "say", live.get("total", 20) + 6)
 
     def watch_screen(self, cid, seconds=30):
         """بث الشاشة للكبير بدون رسالة. يطلع بس «📺» صغير جنب الوقت عشان يكون واضح"""

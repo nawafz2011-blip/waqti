@@ -80,6 +80,11 @@
   .b.all { background:rgba(91,140,255,.16); color:var(--blue); width:100%; padding:10px; margin-top:4px; }
   .b.say { background:rgba(52,211,153,.16); color:#34d399; }
   .b.watch { background:rgba(248,113,113,.16); color:#fca5a5; }
+  .vbox { display:flex; flex-direction:column; gap:8px; align-items:stretch; }
+  .b.vrec { padding:16px; font-size:1.15rem; background:rgba(52,211,153,.16); color:#34d399; }
+  .b.vrec.on { background:rgba(248,113,113,.25); color:#fca5a5; animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.6; } }
+  .vbox audio { width:100%; }
   .setp, .pform { display:flex; flex-direction:column; gap:9px; border-top:1px solid var(--line); padding-top:12px; }
   .pform { border:1px solid var(--line); border-radius:12px; padding:12px; }
   .sp-h { font-weight:800; margin-top:4px; }
@@ -136,6 +141,7 @@
     <div id="ppl" class="ppl"></div>
     <button id="watchbtn" class="b all watch" type="button">📺 شوف شاشة الكمبيوتر (بث مباشر)</button>
     <button id="saybtn" class="b all say" type="button">💬 رسالة لشاشة الكمبيوتر</button>
+    <button id="voicebtn" class="b all say" type="button">🎤 رسالة صوتية للكمبيوتر</button>
     <button id="setbtn" class="b all" type="button">⚙️ الإعدادات (اللاعبين والوقت)</button>
     <div id="setp" class="setp" hidden>
       <div class="sp-h">👥 اللاعبين</div>
@@ -179,6 +185,11 @@
       </div>
       <div id="adjnote" class="st" hidden></div>
       <textarea id="saytext" maxlength="300" placeholder="اكتب الرسالة... (مثلاً: نام الحين 😴)" hidden></textarea>
+      <div id="vbox" class="vbox" hidden>
+        <button id="vrec" class="b vrec" type="button">🎤 اضغط وسجّل</button>
+        <div id="vst" class="st">بحد أقصى 30 ثانية</div>
+        <audio id="vplay" controls hidden></audio>
+      </div>
       <input id="pin" type="password" autocomplete="off" placeholder="رمز الكبير">
       <div class="row"><button id="go" class="b go" type="button">تأكيد</button><button id="cancel" class="b" type="button">إلغاء</button></div>
       <div id="st" class="st" role="status"></div>
@@ -368,7 +379,7 @@
         var b = document.createElement("button"); b.type = "button"; b.className = "b " + (a[0] === "adjust" ? "adj" : a[0] === "reset_time" ? "reset" : a[0] === "logout" ? "out" : a[0]); b.textContent = a[1];
         b.onclick = function () {
           pending = { cmd: a[0], who: n }; ask.hidden = false; st.textContent = ""; st.className = "st";
-          adjSign = 1; saytext.hidden = true; adjbox.hidden = adjnote.hidden = a[0] !== "adjust"; adjmin.value = adjh.value = ""; drawAdj();
+          adjSign = 1; saytext.hidden = true; vbox.hidden = true; adjbox.hidden = adjnote.hidden = a[0] !== "adjust"; adjmin.value = adjh.value = ""; drawAdj();
           askt.textContent = { kick: "تطلّع " + n + " من الجهاز وتمنعه يدخل؟", allow: "تسمح لـ " + n + " يدخل؟",
                                reset_time: "ترجع وقت " + n + " كامل؟", adjust: "كم تزيد أو تنقص من وقت " + n + " اليوم؟", logout: "تطلّع " + n + " من حسابه؟ (يقدر يرجع بعدين)" }[a[0]];
           pinI.value = ""; (a[0] === "adjust" ? adjh : pinI).focus();
@@ -380,7 +391,7 @@
     if (people.length) {
       var all = document.createElement("button"); all.type = "button"; all.className = "b all"; all.textContent = "🔄 ريست للكل (دور جديد، والكل يرجع له وقته)";
       all.onclick = function () {
-        pending = { cmd: "reset_round", who: "الكل" }; ask.hidden = false; adjbox.hidden = adjnote.hidden = saytext.hidden = true; st.textContent = ""; st.className = "st";
+        pending = { cmd: "reset_round", who: "الكل" }; ask.hidden = false; adjbox.hidden = adjnote.hidden = saytext.hidden = vbox.hidden = true; st.textContent = ""; st.className = "st";
         askt.textContent = "دور جديد والكل يرجع له وقته كامل؟"; pinI.value = ""; pinI.focus();
       };
       ppl.appendChild(all);
@@ -438,7 +449,7 @@
     function hmTxt(m) { var h = Math.floor(m / 60), mm = m % 60; return (h ? h + " س" : "") + (h && mm ? " و " : "") + (mm || !h ? mm + " د" : ""); }
     function confirmCfg(d, text) {
       pending = { cmd: "cfg", who: JSON.stringify(d) }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
-      adjbox.hidden = adjnote.hidden = saytext.hidden = true; askt.textContent = text; pinI.value = "";
+      adjbox.hidden = adjnote.hidden = saytext.hidden = vbox.hidden = true; askt.textContent = text; pinI.value = "";
       ask.scrollIntoView({ behavior: "smooth", block: "center" }); pinI.focus();
     }
     document.getElementById("setbtn").onclick = function () { setp.hidden = !setp.hidden; drawSettings(true); };
@@ -516,19 +527,72 @@
       var watch = d.kind === "watch";
       livemsg.textContent = (watch ? "حساب: " + d.who : "رسالتك: " + (d.text || "")) + (d.img ? "" : " · (ما قدر يصوّر الشاشة)");
       var a = watch ? (d.ans ? ["none", "⏹ انتهى البث (30 ثانية)"] : ["wait", "🔴 مباشر · باقي " + d.left + " ث"]) : { ok: ["ok", "👍 " + d.who + " جاوب: أوكي"], no: ["no", "👎 " + d.who + " جاوب: لا"],
-                none: ["none", "⌛ ما جاوب خلال 20 ثانية"] }[d.ans] || ["wait", "⏳ ننتظر جوابه · باقي " + d.left + " ث"];
+                none: ["none", "⌛ ما جاوب"] }[d.ans] || ["wait", "⏳ ننتظر جوابه · باقي " + d.left + " ث"];
       liveans.className = "ans " + a[0]; liveans.textContent = a[1];
       livet.textContent = d.ans ? "📺 آخر صورة للشاشة · " + h12(new Date(ev.time * 1000)) : "📺 🔴 مباشر من الكمبيوتر";
       if (first) livebox.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     document.getElementById("watchbtn").onclick = function () {
       pending = { cmd: "watch", who: "screen" }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
-      adjbox.hidden = adjnote.hidden = saytext.hidden = true;
+      adjbox.hidden = adjnote.hidden = saytext.hidden = vbox.hidden = true;
       askt.textContent = "📺 تشوف شاشة الكمبيوتر 30 ثانية؟ (يطلع 📺 صغير بزاوية الشاشة)"; pinI.value = ""; pinI.focus();
+    };
+    // 🎤 رسالة صوتية: نسجّل WAV (16kHz) بالجوال، ونرفعه للقاعدة، والكمبيوتر يشغّله
+    var vbox = document.getElementById("vbox"), vrec = document.getElementById("vrec"), vst = document.getElementById("vst"), vplay = document.getElementById("vplay");
+    var voiceB64 = null, recState = null;
+    function wavB64(chunks, rate) {
+      var len = chunks.reduce(function (a, c) { return a + c.length; }, 0), ratio = rate / 16000, n = Math.floor(len / ratio);
+      var all = new Float32Array(len), o = 0; chunks.forEach(function (c) { all.set(c, o); o += c.length; });
+      var buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+      function str(off, t) { for (var i = 0; i < t.length; i++) v.setUint8(off + i, t.charCodeAt(i)); }
+      str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVE"); str(12, "fmt "); v.setUint32(16, 16, true);
+      v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 16000, true); v.setUint32(28, 32000, true);
+      v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, "data"); v.setUint32(40, n * 2, true);
+      var peak = 0.05; for (var j = 0; j < len; j++) peak = Math.max(peak, Math.abs(all[j]));
+      var gain = Math.min(4, 0.9 / peak);                       // نرفع الصوت لو كان واطي
+      for (var k = 0; k < n; k++) { var x = Math.max(-1, Math.min(1, all[Math.floor(k * ratio)] * gain)); v.setInt16(44 + k * 2, x * 32767, true); }
+      var bytes = new Uint8Array(buf), bin = ""; for (var q = 0; q < bytes.length; q += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(q, q + 8192));
+      return btoa(bin);
+    }
+    function stopRec() {
+      if (!recState) return;
+      var r = recState; recState = null; clearInterval(r.timer);
+      try { r.proc.disconnect(); r.src.disconnect(); r.stream.getTracks().forEach(function (t) { t.stop(); }); r.ctx.close(); } catch (e) {}
+      vrec.classList.remove("on"); vrec.textContent = "🎤 سجّل من جديد";
+      if (r.chunks.length < 4) { vst.textContent = "قصير مرة، سجّل مرة ثانية"; return; }
+      voiceB64 = wavB64(r.chunks, r.ctx.sampleRate);
+      vplay.src = "data:audio/wav;base64," + voiceB64; vplay.hidden = false;
+      vst.textContent = "✅ جاهز (" + Math.round((Date.now() - r.start) / 1000) + " ث). اسمعه، واكتب رمزك وأرسل.";
+      pinI.focus();
+    }
+    vrec.onclick = function () {
+      if (recState) { stopRec(); return; }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { vst.textContent = "الجوال ما يسمح بالمايك هنا. حدّث تطبيق وقتي."; return; }
+      navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (stream) {
+        var ctx = new (window.AudioContext || window.webkitAudioContext)(), src = ctx.createMediaStreamSource(stream);
+        var proc = ctx.createScriptProcessor(4096, 1, 1), chunks = [];
+        proc.onaudioprocess = function (e) { chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+        src.connect(proc); proc.connect(ctx.destination);
+        recState = { stream: stream, ctx: ctx, src: src, proc: proc, chunks: chunks, start: Date.now() };
+        voiceB64 = null; vplay.hidden = true;
+        vrec.classList.add("on"); vrec.textContent = "⏹ وقّف التسجيل";
+        recState.timer = setInterval(function () {
+          if (!recState) return;
+          var sec = Math.round((Date.now() - recState.start) / 1000); vst.textContent = "🔴 يسجّل... " + sec + " ث";
+          if (sec >= 30) stopRec();
+        }, 250);
+      }).catch(function () { vst.textContent = "ما قدرت أفتح المايك. اسمح لتطبيق وقتي بالمايك."; });
+    };
+    document.getElementById("voicebtn").onclick = function () {
+      pending = { cmd: "voice", who: "" }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
+      adjbox.hidden = adjnote.hidden = saytext.hidden = true; vbox.hidden = false; voiceB64 = null; vplay.hidden = true;
+      vrec.textContent = "🎤 اضغط وسجّل"; vst.textContent = "بحد أقصى 30 ثانية";
+      askt.textContent = "🎤 سجّل رسالتك، وتشتغل بصوت على الكمبيوتر"; pinI.value = "";
+      ask.scrollIntoView({ behavior: "smooth", block: "center" });
     };
     document.getElementById("saybtn").onclick = function () {
       pending = { cmd: "say", who: "" }; ask.hidden = false; pinbox.hidden = true; st.textContent = ""; st.className = "st";
-      adjbox.hidden = adjnote.hidden = true; saytext.hidden = false; saytext.value = "";
+      adjbox.hidden = adjnote.hidden = vbox.hidden = true; saytext.hidden = false; saytext.value = "";
       askt.textContent = "💬 وش تبي يطلع على شاشة الكمبيوتر؟"; pinI.value = ""; saytext.focus();
     };
     document.getElementById("pinbtn").onclick = function () { pinbox.hidden = false; ask.hidden = true; pst.textContent = "";
@@ -560,6 +624,17 @@
       if (!pending) { st.className = "st bad"; st.textContent = "اختر اسم أول: «طلّعه» أو «اسمح له»"; return; }
       if (!pinI.value.trim()) { st.className = "st bad"; st.textContent = "اكتب الرمز"; return; }
       var ts = String(Date.now()), id = Math.random().toString(36).slice(2, 10), cmd = pending.cmd, who = pending.who;
+      var upload = Promise.resolve();
+      if (cmd === "voice") {
+        if (recState) stopRec();
+        if (!voiceB64) { st.className = "st bad"; st.textContent = "سجّل الرسالة أول"; return; }
+        var vid = id, b64 = voiceB64;
+        upload = sha(b64).then(function (hsh) {
+          who = vid + ":" + hsh;
+          return fetch(FB + fbPath(admin + "-voice") + "/" + vid + ".json", { method: "PUT",
+            body: JSON.stringify({ m: b64, t: { ".sv": "timestamp" } }) }).then(function (r) { if (!r.ok) throw new Error("http " + r.status); });
+        });
+      }
       if (cmd === "say") {
         who = saytext.value.trim();
         if (!who) { st.className = "st bad"; st.textContent = "اكتب الرسالة"; return; }
@@ -571,14 +646,14 @@
       }
       var since = Math.floor(Date.now() / 1000) - 5;
       st.className = "st"; st.textContent = "يرسل...";
-      sha("waqti:" + norm(pinI.value)).then(function (h) { return sha(h + cmd + "|" + who + "|" + ts); }).then(function (p) {
+      upload.then(function () { return sha("waqti:" + norm(pinI.value)); }).then(function (h) { return sha(h + cmd + "|" + who + "|" + ts); }).then(function (p) {
         return fbPush(admin + "-ok", { cmd: cmd, who: who, ts: ts, id: id, p: p });
       }).then(function () {
         st.textContent = "انرسل. ننتظر الكمبيوتر...";
         waitRes(admin + "-res-" + id, since, function (done) {
           var ok = done.indexOf("✅") >= 0; st.className = "st " + (ok ? "okc" : "bad"); st.textContent = done;
           if (ok) setTimeout(function () { ask.hidden = true; }, 2500);
-        }, function () { st.className = "st okc"; st.textContent = cmd === "watch" ? "ما أحد قدام الكمبيوتر (الشاشة مقفلة) أو هو طافي" : cmd === "say" ? "ما أحد قدام الكمبيوتر أو هو طافي. انحفظت ✅ وتطلع أول ما يفتح (خلال 12 ساعة)" : /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
+        }, function () { st.className = "st okc"; st.textContent = cmd === "watch" ? "ما أحد قدام الكمبيوتر (الشاشة مقفلة) أو هو طافي" : (cmd === "say" || cmd === "voice") ? "ما أحد قدام الكمبيوتر أو هو طافي. انحفظت ✅ وتطلع أول ما يفتح (خلال 12 ساعة)" : /^(adjust|reset)/.test(cmd) ? "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل (لو اشتغل اليوم)" : "الكمبيوتر طافي. انحفظ ✅ ويتنفذ أول ما يشتغل"; });
       }).catch(function () { st.className = "st bad"; st.textContent = "ما انرسل. تأكد من النت."; });
     };
   }

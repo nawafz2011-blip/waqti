@@ -15,6 +15,8 @@ import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -27,6 +29,7 @@ import android.widget.TextView;
 /** يفتح صفحة المنظم (أو صفحة الإخوان) داخل التطبيق، ويشغّل المراقبة بالخلفية */
 public class MainActivity extends Activity {
     private WebView web;
+    private PermissionRequest pendingMic;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -55,10 +58,37 @@ public class MainActivity extends Activity {
                     return true;
                 }
             });
+            web.setWebChromeClient(new WebChromeClient() {
+                // 🎤 الرسالة الصوتية: الصفحة تطلب المايك، ونطلب إذن الجوال لو ما عطيناه من قبل
+                @Override public void onPermissionRequest(PermissionRequest r) {
+                    runOnUiThread(() -> {
+                        boolean mic = false;
+                        for (String res : r.getResources()) if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)) mic = true;
+                        if (!mic) { r.deny(); return; }
+                        if (Build.VERSION.SDK_INT < 23 || checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            r.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                        } else {
+                            pendingMic = r;
+                            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 2);
+                        }
+                    });
+                }
+            });
+            s.setMediaPlaybackRequiresUserGesture(false);
             web.setOnLongClickListener(v -> { menu(); return true; });
             setContentView(web);
         }
         web.loadUrl(url != null ? url : Links.link(this));
+    }
+
+    @Override public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(code, perms, res);
+        if (code == 2 && pendingMic != null) {
+            if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED)
+                pendingMic.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+            else pendingMic.deny();
+            pendingMic = null;
+        }
     }
 
     @Override public void onBackPressed() {
