@@ -31,9 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 54
-CHANGES = ("نسخة احتياطية تلقائية في القاعدة: لو أحد حذف ملفات البرنامج، يرجع كل شي بروحه (حتى الرمز).\n"
-           "زر «♻️ استرجاع» في الإعدادات. وتصليح غلط كان ممكن يمسح الإعدادات.")
+VERSION = 55
+CHANGES = ("جديد: زر «🔒 منع حذف الملفات» في الإعدادات: بعده ما أحد يقدر يحذف ملفات البرنامج.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -149,14 +148,19 @@ def save_json(path, data, backup=False):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    for i in range(20):
-        try:
-            os.replace(tmp, path)
-            break
-        except PermissionError:          # حساب ثاني يقرا الملف هاللحظة
-            time.sleep(0.05 * (i + 1))
-    else:
+    try:
         os.replace(tmp, path)
+    except PermissionError:              # المجلد مقفول ضد الحذف (أو حساب ثاني يقرا الملف): نكتب فوقه مباشرة
+        text = json.dumps(data, ensure_ascii=False, indent=2)
+        for i in range(20):
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                break
+            except PermissionError:
+                time.sleep(0.05 * (i + 1))
+        else:
+            raise
     if backup:
         try:
             shutil.copyfile(path, path + ".bak")
@@ -306,6 +310,34 @@ def ntfy_send_sync(cfg, text):
 
 @contextlib.contextmanager
 def file_lock(name="state.lock"):
+    if IS_WIN:                           # قفل داخل ملف ثابت (ما ينحذف): يشتغل حتى لو المجلد مقفول ضد الحذف
+        import msvcrt
+        fh = None
+        try:
+            fh = open(os.path.join(DATA_DIR, name.replace(".lock", ".lk")), "a+")
+            for _ in range(200):
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                fh.close()
+                fh = None
+        except Exception:
+            fh = None
+        try:
+            yield
+        finally:
+            if fh is not None:
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except Exception:
+                    pass
+                fh.close()
+        return
     path = os.path.join(DATA_DIR, name)
     fd = None
     for _ in range(100):
@@ -737,6 +769,35 @@ def set_autostart_all():
     return r > 32
 
 
+def protect_data_dir():
+    """نقفل مجلد البرنامج: كل الحسابات تقرا وتكتب، بس ما أحد يحذف أو يغيّر الصلاحيات إلا المسؤول (Admin).
+    يطلب موافقة ويندوز مرة وحدة"""
+    import ctypes
+    d = DATA_DIR.rstrip("\\")
+    cmd = (f'/c icacls "{d}" /setowner *S-1-5-32-544 /T /C /Q & '
+           f'icacls "{d}" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F '
+           f'*S-1-5-32-545:(OI)(CI)(RX,W) *S-1-3-4:(OI)(CI)(RX,W) /T /C /Q')
+    r = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", cmd, None, 0)
+    return r > 32
+
+
+def data_dir_protected():
+    """نجرب: نقدر نحذف ملف من المجلد؟"""
+    probe = os.path.join(DATA_DIR, ".probe")
+    try:
+        with open(probe, "w") as f:
+            f.write("x")
+    except Exception:
+        return False
+    try:
+        os.remove(probe)
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
 def set_watchdog():
     """مهمة ويندوز كل دقيقة: لو أحد سكّر البرنامج (مدير المهام)، يرجع يشتغل خلال دقيقة.
     ما يرجع إذا الكبير سكّره بالرمز. لو البرنامج شغال، النسخة الجديدة تطلع على طول"""
@@ -1000,7 +1061,11 @@ class App:
                 os.chmod(path, stat.S_IWRITE | stat.S_IREAD)  # لو الملف للقراءة بس
             except Exception:
                 pass
-            os.replace(tmp, path)
+            try:
+                os.replace(tmp, path)
+            except PermissionError:      # المجلد مقفول ضد الحذف: نكتب الكود فوق الملف مباشرة
+                with open(path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(code)
         except Exception as ex:
             self.update_ready = None
             if getattr(self, "update_failed_ver", None) != ver:   # نسجل الفشل مرة وحدة بس
@@ -1141,6 +1206,30 @@ class App:
             self.root.after(delay, go)
         except Exception:
             self._bk_pending = False
+
+    def protect_files(self):
+        if data_dir_protected():
+            self.info("مقفول ✅", "ملفات البرنامج مقفولة من قبل: ما أحد يقدر يحذفها.")
+            return
+        v, _ = self.ask("🔒 منع حذف الملفات",
+                        "بعدها ما أحد يقدر يحذف ملفات البرنامج (إلا حساب مسؤول Admin).\n"
+                        "ويندوز بيسألك «هل تسمح لهذا التطبيق بإجراء تغييرات؟» اضغط «نعم».",
+                        [("كمّل", "y"), ("إلغاء", None)])
+        if not v:
+            return
+        if not protect_data_dir():
+            self.info("ما تم", "لازم توافق على رسالة ويندوز، ومن حساب مسؤول (Admin).")
+            return
+
+        def check(n=0):
+            if data_dir_protected():
+                self.log("protected", "🔒 الكبير قفل ملفات البرنامج ضد الحذف", None, admin=True)
+                self.info("تم ✅", "ملفات البرنامج مقفولة: ما أحد يقدر يحذفها.")
+            elif n < 15:
+                self.root.after(1000, lambda: check(n + 1))
+            else:
+                self.info("ما تم", "ما قدرت أقفلها. تأكد إنك ضغطت «نعم» في رسالة ويندوز.")
+        self.root.after(1500, check)
 
     def restore_from_link(self):
         """استرجاع يدوي: كود رابط المنظم + الرمز القديم ← اللاعبين والإعدادات والرمز من القاعدة"""
@@ -3060,6 +3149,8 @@ class App:
             btn(bb, "تشغيل لكل الحسابات", self.autostart_all, bg=BG).pack(side="right", padx=4)
         btn(bb, "تغيير رمز الكبير", change_admin_pin, bg=BG).pack(side="right", padx=4)
         btn(bb, "♻️ استرجاع", lambda: (close(), self.restore_from_link()), bg=BG).pack(side="right", padx=4)
+        if IS_WIN:
+            btn(bb, "🔒 منع حذف الملفات", lambda: (close(), self.protect_files()), bg=BG).pack(side="right", padx=4)
         btn(bb, "إلغاء", close, bg=DIM).pack(side="left", padx=4)
 
         s.update_idletasks()
