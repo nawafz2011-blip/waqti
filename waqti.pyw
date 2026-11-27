@@ -14,6 +14,7 @@ import datetime
 import getpass
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -31,12 +32,16 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 58
-CHANGES = ("جديد: «⛔ قفل الجهاز» من جوال الكبير: يقفل على الكل من وقت لين وقت، وبعدها يفتح بروحه.")
+VERSION = 59
+CHANGES = ("🕌 جديد: تنبيه قبل الأذان بـ10 و5 و2 ودقيقة، ووقت الأذان شاشة الصلاة (القرآن) والوقت واقف،\n"
+           "وبعدها يرجع الجهاز. الأوقات على تقويم أم القرى للجبيل الصناعية.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
+MEDIA_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/media/"
+MEDIA_FILES = {"quran.mp3": 3600682, "mosque.png": 0, "adhan.mp3": 0}   # الحجم 0 = أي حجم
+PRAYER_NAMES = {"fajr": "الفجر", "dhuhr": "الظهر", "asr": "العصر", "maghrib": "المغرب", "isha": "العشاء"}
 
 try:
     USER = getpass.getuser().strip().lower()
@@ -110,7 +115,8 @@ DEFAULT_CONFIG = {
     "nobody_awake_minutes": 30,    # كم دقيقة يعطي خيار "ما أحد صاحي"
     "nobody_awake_per_day": 1,     # كم مرة باليوم لكل لاعب
     "day_start_hour": 4,           # اليوم الجديد يبدأ الساعة 4 الفجر
-    "last_wait_hours": 2,          # آخر واحد لعب ينتظر كم ساعة قبل ما يبدأ دور جديد
+    "last_wait_hours": 2,
+    "prayer": {"on": True, "lat": 26.96, "lng": 49.57, "tz": 3, "city": "الجبيل الصناعية"},          # آخر واحد لعب ينتظر كم ساعة قبل ما يبدأ دور جديد
     "free_accounts": "",          # حسابات ويندوز بدون حد، مفصولة بفاصلة
     "ntfy_topic": "",             # اسم صفحة الإشعارات على ntfy.sh (ينصنع تلقائياً)
     "telegram_token": "",
@@ -517,6 +523,68 @@ def screen_shot(width=720):
         return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
     except Exception:
         return None
+
+
+# ---- أوقات الصلاة (أم القرى: الفجر 18.5°، العشاء بعد المغرب بساعة ونص، وفي رمضان ساعتين)
+def _d(x): return math.degrees(x)
+def _r(x): return math.radians(x)
+def _fix(a, b): a = a - b * math.floor(a / b); return a + b if a < 0 else a
+def _sun(jd):
+    D = jd - 2451545.0
+    g = _fix(357.529 + 0.98560028 * D, 360); q = _fix(280.459 + 0.98564736 * D, 360)
+    L = _fix(q + 1.915 * math.sin(_r(g)) + 0.020 * math.sin(_r(2 * g)), 360)
+    e = 23.439 - 0.00000036 * D
+    RA = _d(math.atan2(math.cos(_r(e)) * math.sin(_r(L)), math.cos(_r(L)))) / 15
+    return _d(math.asin(math.sin(_r(e)) * math.sin(_r(L)))), q / 15 - _fix(RA, 24)
+def _hijri_month(d):
+    jd = d.toordinal() + 1721425
+    l = jd - 1948440 + 10632; n = (l - 1) // 10631; l = l - 10631 * n + 354
+    j = ((10985 - l) // 5316) * ((50 * l) // 17719) + (l // 5670) * ((43 * l) // 15238)
+    l = l - ((30 - j) // 15) * ((17719 * j) // 50) - (j // 16) * ((15238 * j) // 43) + 29
+    return (24 * l) // 709
+def prayer_times(day, lat, lng, tz=3):
+    jd = day.toordinal() + 1721424.5 - lng / (15 * 24)
+    def mid(t): return _fix(12 - _sun(jd + t)[1], 24)
+    def angle_time(angle, t, ccw=False):
+        decl = _sun(jd + t)[0]
+        x = (-math.sin(_r(angle)) - math.sin(_r(decl)) * math.sin(_r(lat))) / (math.cos(_r(decl)) * math.cos(_r(lat)))
+        T = _d(math.acos(max(-1, min(1, x)))) / 15
+        return mid(t) + (-T if ccw else T)
+    def asr(t):
+        decl = _sun(jd + t)[0]
+        return angle_time(-_d(math.atan(1 / (1 + math.tan(_r(abs(lat - decl)))))), t)
+    t = {"fajr": angle_time(18.5, 5 / 24, True), "dhuhr": mid(12 / 24), "asr": asr(13 / 24),
+         "maghrib": angle_time(0.833, 18 / 24)}
+    t["isha"] = t["maghrib"] + (2.0 if _hijri_month(day) == 9 else 1.5)
+    base = datetime.datetime.combine(day, datetime.time())
+    return {k: base + datetime.timedelta(hours=v + tz - lng / 15) for k, v in t.items()}
+
+MEDIA_DIR = os.path.join(DATA_DIR, "media")
+
+
+def fetch_media():
+    """صوت الأذان والقرآن وصورة الحرم: تنزل مرة وحدة وتنحفظ عندنا"""
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    for name, size in MEDIA_FILES.items():
+        path = os.path.join(MEDIA_DIR, name)
+        try:
+            if os.path.exists(path) and os.path.getsize(path) > 1000 and (not size or os.path.getsize(path) == size):
+                continue
+            with urllib.request.urlopen(MEDIA_URL + name, timeout=120) as r:
+                data = r.read()
+            if len(data) > 1000:
+                with open(path, "wb") as f:
+                    f.write(data)
+        except Exception:
+            pass
+
+
+def mci(cmd):
+    """تشغيل mp3 في ويندوز بدون مكتبات (MCI)"""
+    import ctypes
+    buf = ctypes.create_unicode_buffer(256)
+    ctypes.windll.winmm.mciSendStringW(cmd, buf, 255, 0)
+    return buf.value
 
 
 def machine_id():
@@ -960,6 +1028,7 @@ class App:
         self.root.after(500, self.keep_on_top)
         self.root.after(5000, self.check_update)
         self.start_stream()
+        threading.Thread(target=fetch_media, daemon=True).start()
         self.root.after(2000, self.publish_roster)    # الإعدادات لجوال الكبير من أول ما يشتغل
         self.root.after(200, self.fast_cmds)
         seen = self.cfg.setdefault("seen_versions", {})
@@ -2859,6 +2928,132 @@ class App:
         t.bind("<Button-1>", lambda e: t.destroy())
         t.after(8000, lambda: t.winfo_exists() and t.destroy())
 
+    def check_prayer(self):
+        """قبل الأذان بـ10 و5 و2 ودقيقة: تنبيه. وقت الأذان: شاشة الصلاة (الأذان ثم القرآن) والوقت واقف"""
+        pr = self.cfg.get("prayer") or {}
+        if not pr.get("on") or self.free or not session_active():
+            return
+        now = datetime.datetime.now()
+        key = now.date().isoformat()
+        if getattr(self, "_ptimes", (None,))[0] != key:
+            try:
+                self._ptimes = (key, prayer_times(now.date(), float(pr["lat"]), float(pr["lng"]), float(pr.get("tz", 3))))
+            except Exception:
+                return
+            self._pdone = set()
+        for k, at in self._ptimes[1].items():
+            left = (at - now).total_seconds()
+            if self.active:
+                for m in (10, 5, 2, 1):
+                    tag = f"{k}-{m}"
+                    if m * 60 - 60 < left <= m * 60 and tag not in self._pdone:
+                        self._pdone.add(tag)
+                        self.toast("🕌 " + (f"باقي {m} دقايق" if m > 2 else "باقي دقيقتين" if m == 2 else "باقي دقيقة")
+                                   + f" على أذان {PRAYER_NAMES[k]}",
+                                   f"أذان {PRAYER_NAMES[k]} الساعة {h12(at)} · احفظ لعبتك، الجهاز بيوقف وقت الصلاة", "#0f766e")
+            if -90 <= left <= 0 and k not in self._pdone:
+                self._pdone.add(k)
+                self.show_prayer(k, at)
+
+    def show_prayer(self, key, at):
+        if getattr(self, "prayer_win", None) is not None:
+            return
+        name = PRAYER_NAMES[key]
+        self.log("prayer", f"🕌 أذان {name}: الجهاز وقف وقت الصلاة", self.active)
+        w = self.prayer_win = tk.Toplevel(self.root)
+        w.overrideredirect(True)
+        w.attributes("-topmost", True)
+        w.configure(bg="#040a14")
+        x, y, sw, sh = screen_geom(self.root)
+        w.geometry(f"{sw}x{sh}+{x}+{y}")
+        try:
+            self._mosque = tk.PhotoImage(file=os.path.join(MEDIA_DIR, "mosque.png"))
+            iw, ih = self._mosque.width(), self._mosque.height()
+            z = max(1, -(-sw // iw), -(-sh // ih))     # نكبرها لين تغطي الشاشة
+            if z > 1:
+                self._mosque = self._mosque.zoom(z, z)
+            tk.Label(w, image=self._mosque, bd=0, bg="#040a14").place(relx=0.5, rely=0.5, anchor="center")
+        except Exception:
+            pass
+        bg = "#0b1424"
+        box = tk.Frame(w, bg=bg, padx=48, pady=30, highlightthickness=1, highlightbackground="#a1874f")
+        box.place(relx=0.5, rely=0.5, anchor="center")
+        tk.Label(box, text="حان الآن موعد", font=(FONT, 18), bg=bg, fg="#fde68a").pack()
+        tk.Label(box, text=f"🕌  أذان {name}", font=(FONT, 46, "bold"), bg=bg, fg="white").pack(pady=(4, 0))
+        pr = self.cfg.get("prayer") or {}
+        tk.Label(box, text=f"{h12(at)} · {pr.get('city', '')}", font=(FONT, 18), bg=bg, fg="#e2e8f0").pack()
+        tk.Label(box, text="﴿ قَدْ أَفْلَحَ الْمُؤْمِنُونَ  ·  الَّذِينَ هُمْ فِي صَلَاتِهِمْ خَاشِعُونَ ﴾", font=(FONT, 18),
+                 bg=bg, fg="#fef3c7").pack(pady=(18, 0))
+        now_lbl = tk.Label(box, text="", font=(FONT, 15, "bold"), bg=bg, fg="white")
+        now_lbl.pack(pady=(18, 0))
+        back = tk.Label(box, text="", font=(FONT, 14), bg=bg, fg="#cbd5e1")
+        back.pack(pady=(10, 0))
+        tk.Button(w, text="👑", font=(FONT, 10), bg="#040a14", fg="#64748b", relief="flat", bd=0,
+                  command=lambda: self.check_admin("تنهي شاشة الصلاة؟ (للكبير بس)") and self.end_prayer()).place(
+            relx=0.99, rely=0.98, anchor="se")
+        st = self._prayer = {"stop": False, "phase": "adhan", "end": time.time() + 13 * 60}
+        tracks = [(f, t) for f, t in (("adhan.mp3", "🔊 الأذان"), ("quran.mp3", "🔊 يُتلى الآن: سورة المؤمنون · الشيخ ياسر الدوسري"))
+                  if os.path.exists(os.path.join(MEDIA_DIR, f))]
+
+        def audio():
+            """كل أوامر الصوت من نفس الخيط: الأذان، بعده القرآن. ولما يخلص، الجهاز يرجع"""
+            if not IS_WIN or not tracks:
+                time.sleep(2 if not IS_WIN else 0)
+                return
+            total = 0
+            lens = []
+            for f, _t in tracks:
+                mci(f'open "{os.path.join(MEDIA_DIR, f)}" type mpegvideo alias wq_len')
+                try:
+                    lens.append(int(mci("status wq_len length") or 0) / 1000)
+                except ValueError:
+                    lens.append(0)
+                mci("close wq_len")
+            total = sum(lens) or 13 * 60
+            st["end"] = time.time() + total + 5
+            for (f, t), ln in zip(tracks, lens):
+                if st["stop"]:
+                    break
+                st["phase"] = t
+                mci(f'open "{os.path.join(MEDIA_DIR, f)}" type mpegvideo alias wq')
+                mci("play wq")
+                t0 = time.time()
+                while not st["stop"] and mci("status wq mode") == "playing" and time.time() - t0 < (ln or 900) + 5:
+                    time.sleep(0.3)
+                mci("stop wq")
+                mci("close wq")
+            st["audio_done"] = True
+
+        threading.Thread(target=audio, daemon=True).start()
+
+        def loop():
+            if self.prayer_win is None:
+                return
+            left = st["end"] - time.time()
+            if st["stop"] or left <= 0 or (st.get("audio_done") and IS_WIN):
+                self.end_prayer()
+                return
+            now_lbl.configure(text=st["phase"] if st["phase"] != "adhan" else (tracks[0][1] if tracks else "🕌 وقت الصلاة"))
+            back.configure(text=f"يرجع الجهاز بعد {int(left) // 60}:{int(left) % 60:02d}  ·  وقتك واقف وما ينحسب")
+            w.after(500, loop)
+        loop()
+
+    def end_prayer(self):
+        st = getattr(self, "_prayer", None)
+        if st:
+            st["stop"] = True
+        w, self.prayer_win = getattr(self, "prayer_win", None), None
+        if w is not None:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self.last = time.monotonic()
+        if self.active:
+            self.show_timer()
+        else:
+            self.show_lock()
+
     def play_voice(self, path):
         if IS_WIN:
             try:
@@ -2985,6 +3180,9 @@ class App:
                 dt = 0
             if not session_active():  # الحساب مقفل أو حساب ثاني قدام الشاشة - ما نحسب
                 dt = 0
+            if getattr(self, "prayer_win", None) is not None:
+                dt = 0                    # وقت الصلاة: الوقت واقف
+            self.check_prayer()
             if getattr(self, "reset_approved", None):
                 (kind, who), self.reset_approved = self.reset_approved, None
                 self.do_reset(kind, who, "بموافقة المنظم من الجوال")
@@ -3066,7 +3264,11 @@ class App:
 
     def keep_on_top(self):
         try:
-            if self.dialogs:
+            pw = getattr(self, "prayer_win", None)
+            if pw is not None and pw.winfo_exists() and not self.dialogs:
+                pw.lift()
+                pw.attributes("-topmost", True)
+            elif self.dialogs:
                 for d in list(self.dialogs):
                     if d.winfo_exists():
                         d.lift()
