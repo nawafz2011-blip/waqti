@@ -32,14 +32,14 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 65
-CHANGES = ("🕌 شاشة الصلاة: الآية تطلع كاملة مع رقمها، وتتبدل أول ما يبدأ القارئ الآية اللي بعدها.")
+VERSION = 66
+CHANGES = ("🕌 شاشة الصلاة: الآية الطويلة تنقسم أجزاء قصيرة تمشي مع القارئ، والمربع حجمه ثابت.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 MEDIA_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/media/"
-MEDIA_FILES = {"quran.mp3": 3600682, "mosque.png": 0, "adhan.mp3": 0, "quran_lines.json": 22029, "AmiriQuran.ttf": 97932}   # الحجم 0 = أي حجم
+MEDIA_FILES = {"quran.mp3": 3600682, "mosque.png": 0, "adhan.mp3": 0, "quran_lines.json": 25153, "AmiriQuran.ttf": 97932}   # الحجم 0 = أي حجم
 PRAYER_NAMES = {"fajr": "الفجر", "dhuhr": "الظهر", "asr": "العصر", "maghrib": "المغرب", "isha": "العشاء"}
 
 try:
@@ -3019,7 +3019,7 @@ class App:
         qfam = quran_font()
         qfont = (qfam, 30) if qfam else ("Segoe UI" if IS_WIN else FONT, 26, "bold")
         qkey = "text" if qfam else "simple"     # بدون الخط: نكتبها بعلامات عادية عشان ما تطلع مربعات
-        ayah = tk.Label(box, text="", font=qfont, bg=bg, fg="#fef3c7", wraplength=900, justify="center")
+        ayah = tk.Label(box, text="", font=qfont, bg=bg, fg="#fef3c7", width=44, height=1, anchor="center")  # حجم ثابت
         ayah.pack(pady=(16, 0))
         try:
             with open(os.path.join(MEDIA_DIR, "quran_lines.json"), encoding="utf-8") as f:
