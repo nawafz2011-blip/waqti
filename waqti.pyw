@@ -32,15 +32,14 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 59
-CHANGES = ("🕌 جديد: تنبيه قبل الأذان بـ10 و5 و2 ودقيقة، ووقت الأذان شاشة الصلاة (القرآن) والوقت واقف،\n"
-           "وبعدها يرجع الجهاز. الأوقات على تقويم أم القرى للجبيل الصناعية.")
+VERSION = 60
+CHANGES = ("🕌 شاشة الصلاة صار فيها الآيات مكتوبة وتمشي مع التلاوة (بالرسم العثماني الصحيح).")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 MEDIA_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/media/"
-MEDIA_FILES = {"quran.mp3": 3600682, "mosque.png": 0, "adhan.mp3": 0}   # الحجم 0 = أي حجم
+MEDIA_FILES = {"quran.mp3": 3600682, "mosque.png": 0, "adhan.mp3": 0, "quran_lines.json": 0}   # الحجم 0 = أي حجم
 PRAYER_NAMES = {"fajr": "الفجر", "dhuhr": "الظهر", "asr": "العصر", "maghrib": "المغرب", "isha": "العشاء"}
 
 try:
@@ -2982,10 +2981,16 @@ class App:
         tk.Label(box, text=f"🕌  أذان {name}", font=(FONT, 46, "bold"), bg=bg, fg="white").pack(pady=(4, 0))
         pr = self.cfg.get("prayer") or {}
         tk.Label(box, text=f"{h12(at)} · {pr.get('city', '')}", font=(FONT, 18), bg=bg, fg="#e2e8f0").pack()
-        tk.Label(box, text="﴿ قَدْ أَفْلَحَ الْمُؤْمِنُونَ  ·  الَّذِينَ هُمْ فِي صَلَاتِهِمْ خَاشِعُونَ ﴾", font=(FONT, 18),
-                 bg=bg, fg="#fef3c7").pack(pady=(18, 0))
+        qfont = ("Segoe UI" if IS_WIN else FONT, 26, "bold")
+        ayah = tk.Label(box, text="", font=qfont, bg=bg, fg="#fef3c7", wraplength=900, justify="center")
+        ayah.pack(pady=(16, 0))
+        try:
+            with open(os.path.join(MEDIA_DIR, "quran_lines.json"), encoding="utf-8") as f:
+                qlines = json.load(f)
+        except Exception:
+            qlines = []
         now_lbl = tk.Label(box, text="", font=(FONT, 15, "bold"), bg=bg, fg="white")
-        now_lbl.pack(pady=(18, 0))
+        now_lbl.pack(pady=(14, 0))
         back = tk.Label(box, text="", font=(FONT, 14), bg=bg, fg="#cbd5e1")
         back.pack(pady=(10, 0))
         tk.Button(w, text="👑", font=(FONT, 10), bg="#040a14", fg="#64748b", relief="flat", bd=0,
@@ -3018,8 +3023,13 @@ class App:
                 mci(f'open "{os.path.join(MEDIA_DIR, f)}" type mpegvideo alias wq')
                 mci("play wq")
                 t0 = time.time()
+                st["track"] = f
                 while not st["stop"] and mci("status wq mode") == "playing" and time.time() - t0 < (ln or 900) + 5:
-                    time.sleep(0.3)
+                    try:
+                        st["pos"] = int(mci("status wq position") or 0) / 1000
+                    except ValueError:
+                        st["pos"] = time.time() - t0
+                    time.sleep(0.25)
                 mci("stop wq")
                 mci("close wq")
             st["audio_done"] = True
@@ -3034,6 +3044,14 @@ class App:
                 self.end_prayer()
                 return
             now_lbl.configure(text=st["phase"] if st["phase"] != "adhan" else (tracks[0][1] if tracks else "🕌 وقت الصلاة"))
+            if st.get("track") == "quran.mp3" and qlines:      # الآيات تمشي مع التلاوة (نفس كتابة الفيديو)
+                pos = st.get("pos", 0)
+                cur = [q for q in qlines if q["t"] <= pos + 0.2]
+                line = cur[-1]["text"] if cur else qlines[0]["text"]
+                if ayah.cget("text") != line:
+                    ayah.configure(text=line)
+            elif st.get("track") == "adhan.mp3":
+                ayah.configure(text="اللَّهُ أَكْبَرُ")
             back.configure(text=f"يرجع الجهاز بعد {int(left) // 60}:{int(left) % 60:02d}  ·  وقتك واقف وما ينحسب")
             w.after(500, loop)
         loop()
