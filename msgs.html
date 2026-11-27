@@ -97,6 +97,12 @@
   .fld .hm { display:flex; gap:6px; } .fld .hm input { width:64px; }
   .fld.chk { justify-content:flex-start; } .fld.chk input { width:auto; }
   .fld input.dt { width:200px; } .fld select { width:150px; }
+  .wtabs { display:flex; gap:8px; } .wtabs .b { flex:1; } .wtabs .b.on { background:rgba(91,140,255,.25); color:#93c5fd; }
+  .wk { width:100%; border-collapse:collapse; font-size:.92rem; }
+  .wk th, .wk td { padding:7px 4px; text-align:center; border-bottom:1px solid var(--line); }
+  .wk th:first-child, .wk td:first-child { text-align:right; color:var(--muted, #94a3b8); }
+  .wk tr.tot td { font-weight:800; border-bottom:0; color:var(--fg); } .wk tr.tot td.top { color:#fbbf24; }
+  .wk td.today { background:rgba(91,140,255,.08); }
   .lockban { padding:10px; border-radius:10px; background:rgba(248,113,113,.15); color:#fca5a5; font-weight:800; text-align:center; margin-bottom:8px; }
   .live { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
   .live img { width:100%; border-radius:10px; background:#000; min-height:120px; }
@@ -141,6 +147,11 @@
   <section id="ctl" class="ctl" hidden>
     <div class="ctl-h">👑 تحكم المنظم</div>
     <div id="ppl" class="ppl"></div>
+    <button id="weekbtn" class="b all" type="button">📊 تقرير الأسبوع</button>
+    <div id="weekbox" class="pform" hidden>
+      <div class="wtabs"><button id="wk_now" class="b on" type="button">هالأسبوع</button><button id="wk_last" class="b" type="button">الأسبوع اللي فات</button></div>
+      <div id="wk_body"></div>
+    </div>
     <button id="lockbtn" class="b all watch" type="button">⛔ قفل الجهاز على الكل (لين وقت)</button>
     <div id="lockbox" class="pform" hidden>
       <div class="sp-h">⛔ قفل الجهاز على الكل</div>
@@ -525,6 +536,37 @@
         pform.hidden = true;
       });
     };
+    // 📊 تقرير الأسبوع: كل يوم لحاله لكل لاعب (الأسبوع يبدأ الجمعة)
+    var weekbox = document.getElementById("weekbox"), wkBody = document.getElementById("wk_body"), wkData = { now: null, last: null }, wkShow = "now";
+    var DAYS = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+    function hmS(sec) { var m = Math.round(sec / 60); return m < 1 ? "—" : Math.floor(m / 60) + ":" + ("0" + (m % 60)).slice(-2); }
+    function drawWeek() {
+      var d = wkData[wkShow];
+      if (!d || !d.week_id) { wkBody.innerHTML = '<div class="st">' + (wkShow === "now" ? "ننتظر من الكمبيوتر… (نسخته لازم 63 أو أكثر)" : "ما فيه تقرير للأسبوع اللي فات للحين") + "</div>"; return; }
+      var names = Object.keys(d.week || {});
+      (cfgInfo && cfgInfo.roster || []).forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); });
+      var start = new Date(d.week_id + "T12:00:00"), todayKey = new Date(Date.now() - 4 * 3600000);
+      todayKey = todayKey.getFullYear() + "-" + ("0" + (todayKey.getMonth() + 1)).slice(-2) + "-" + ("0" + todayKey.getDate()).slice(-2);
+      var t = document.createElement("table"); t.className = "wk";
+      var head = "<tr><th></th>" + names.map(function (n) { return "<th></th>"; }).join("") + "</tr>";
+      t.innerHTML = head;
+      names.forEach(function (n, i) { t.rows[0].cells[i + 1].textContent = n; });
+      var best = Math.max.apply(null, names.map(function (n) { return (d.week || {})[n] || 0; }));
+      for (var i = 0; i < 7; i++) {
+        var day = new Date(start.getTime() + i * 86400000), key = day.getFullYear() + "-" + ("0" + (day.getMonth() + 1)).slice(-2) + "-" + ("0" + day.getDate()).slice(-2);
+        var r = t.insertRow(), c0 = r.insertCell(); c0.textContent = DAYS[day.getDay()] + " " + day.getDate() + "/" + (day.getMonth() + 1);
+        names.forEach(function (n) { var c = r.insertCell(); c.textContent = hmS((d.wd || {})[key + "|" + n] || 0); if (key === todayKey && wkShow === "now") c.className = "today"; });
+      }
+      var tr = t.insertRow(); tr.className = "tot"; tr.insertCell().textContent = "المجموع";
+      names.forEach(function (n) { var c = tr.insertCell(), v = (d.week || {})[n] || 0; c.textContent = hmS(v); if (v && v === best) c.className = "top"; });
+      wkBody.innerHTML = ""; wkBody.appendChild(t);
+      var note = document.createElement("div"); note.className = "st"; note.textContent = "بالساعات:الدقايق · الأصفر أكثر واحد لعب"; wkBody.appendChild(note);
+    }
+    fbValue(admin + "-week", function (ev) { try { wkData.now = JSON.parse(ev.message); if (!weekbox.hidden) drawWeek(); } catch (e) {} });
+    fbValue(admin + "-weeklast", function (ev) { try { wkData.last = JSON.parse(ev.message); if (!weekbox.hidden) drawWeek(); } catch (e) {} });
+    document.getElementById("weekbtn").onclick = function () { weekbox.hidden = !weekbox.hidden; if (!weekbox.hidden) drawWeek(); };
+    ["now", "last"].forEach(function (k) { document.getElementById("wk_" + k).onclick = function () {
+      wkShow = k; document.getElementById("wk_now").className = "b" + (k === "now" ? " on" : ""); document.getElementById("wk_last").className = "b" + (k === "last" ? " on" : ""); drawWeek(); }; });
     var lockbox = document.getElementById("lockbox"), lknote = document.getElementById("lknote");
     function dtLocal(ms) { var d = new Date(ms - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); }
     function drawLockCur() {

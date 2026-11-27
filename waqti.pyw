@@ -32,8 +32,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 62
-CHANGES = ("🕌 الآيات في شاشة الصلاة صار فيها علامة نهاية الآية ورقمها (۝١ ۝٢ ...) مثل المصحف.")
+VERSION = 63
+CHANGES = ("📊 تقرير الأسبوع صار في جوال الكبير: كم لعب كل واحد هالأسبوع، كل يوم لحاله. وتقرير الجمعة يرن للمنظم.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -620,7 +620,7 @@ def backup_path():
 
 
 BACKUP_STATE_KEYS = ("date", "used", "bonus", "nobody", "round", "blocked", "penalty", "open", "skipped",
-                     "week", "week_id", "finished_at", "round_announced")
+                     "week", "week_id", "finished_at", "round_announced", "wd")
 DEFAULT_NAMES = [p["name"] for p in DEFAULT_CONFIG["players"]]
 
 
@@ -1199,7 +1199,7 @@ class App:
                 if st[k]:
                     st[k + "_by"][USER] = st[k]
                 del st[k]
-        for k in ("used", "bonus", "nobody", "week"):
+        for k in ("used", "bonus", "nobody", "week", "wd"):
             st.setdefault(k, {})
         return st
 
@@ -1214,12 +1214,12 @@ class App:
             mine = self.state
             if mine:
                 if mine.get("date") and (disk.get("date") or "") < mine["date"]:
-                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_fb", "say_shown", "running_by", "closed_by") if k in disk}
+                    keep = {k: disk[k] for k in ("round", "reset_fails", "reset_locked", "open", "penalty", "skipped", "blocked", "cmds_done", "week", "wd", "week_id", "report_sent", "remote_fails", "remote_lock", "round_announced", "finished_at", "roster_fb", "say_shown", "running_by", "closed_by") if k in disk}
                     disk = {"date": mine["date"], "used": {}, "bonus": {}, "nobody": {},
                             "active_by": disk["active_by"], "resume_by": disk["resume_by"], **keep}
                 if disk.get("date") == mine.get("date"):
                     base = self.base if self.base.get("date") == mine.get("date") else {}
-                    for k in ("used", "bonus", "nobody", "week"):
+                    for k in ("used", "bonus", "nobody", "week", "wd"):
                         cur, old = mine.get(k, {}), base.get(k, {})
                         for n in set(cur) | set(old):
                             d = cur.get(n, 0) - old.get(n, 0)
@@ -1414,10 +1414,11 @@ class App:
         if self.state.get("date") != t:
             self.state = {"date": t, "used": {}, "bonus": {}, "nobody": {},
                           "week": self.state.get("week", {}), "week_id": self.state.get("week_id"),
+                          "wd": self.state.get("wd", {}),
                           "active": self.state.get("active"), "resume": self.state.get("resume")}
             self.save_state()
             return True
-        for k in ("used", "bonus", "nobody", "week"):
+        for k in ("used", "bonus", "nobody", "week", "wd"):
             self.state.setdefault(k, {})
         return False
 
@@ -2015,6 +2016,9 @@ class App:
                         for k in ("used", "bonus", "nobody", "week"):
                             if old in st.get(k, {}):
                                 st[k][name] = st[k].pop(old)
+                        for k in list((st.get("wd") or {}).keys()):     # التقرير اليومي بالاسم الجديد
+                            if k.endswith("|" + old):
+                                st["wd"][k[:-len(old)] + name] = st["wd"].pop(k)
                         for k in ("round", "blocked", "skipped"):
                             st[k] = [name if x == old else x for x in st.get(k, [])]
                     self.state_op(op_r)
@@ -2324,7 +2328,7 @@ class App:
         return (d - datetime.timedelta(days=(d.weekday() - 4) % 7)).isoformat()   # الأسبوع يبدأ الجمعة
 
     def check_week(self):
-        """تقرير الأسبوع: أول ما يبدأ أسبوع جديد (الجمعة) يرسل ملخص الأسبوع اللي راح"""
+        """تقرير الأسبوع: أول ما يبدأ أسبوع جديد (الجمعة) يرسل ملخص الأسبوع اللي راح (للكل وللمنظم)"""
         wid = self.week_id()
         if self.state.get("week_id") == wid:
             return
@@ -2333,13 +2337,25 @@ class App:
         def op(st):
             if st.get("week_id") == wid:
                 return
-            info["old"], info["week"] = st.get("week_id"), dict(st.get("week") or {})
-            st["week_id"], st["week"] = wid, {}
+            info["old"], info["week"], info["wd"] = st.get("week_id"), dict(st.get("week") or {}), dict(st.get("wd") or {})
+            st["week_id"], st["week"], st["wd"] = wid, {}, {}
         self.state_op(op)
         if info.get("old") and info.get("week"):
             parts = sorted(info["week"].items(), key=lambda kv: -kv[1])
             lines = "، ".join(f"{n} {dur(round(sec / 60))}" for n, sec in parts if sec >= 60)
-            self.log("report", f"📊 تقرير الأسبوع: {lines or 'ما أحد لعب'}", notify=True)
+            self.log("report", f"📊 تقرير الأسبوع: {lines or 'ما أحد لعب'}", notify=True, admin=True)
+            ntfy_publish_raw(self.cfg["admin_topic"] + "-weeklast", json.dumps(
+                {"week_id": info["old"], "week": info["week"], "wd": info["wd"]}, ensure_ascii=False))
+
+    def publish_week(self):
+        """أوقات الأسبوع لصفحة المنظم (زر «📊 تقرير الأسبوع»): كل دقيقتين لو تغيّرت"""
+        body = json.dumps({"week_id": self.state.get("week_id"), "week": self.state.get("week") or {},
+                           "wd": self.state.get("wd") or {}}, ensure_ascii=False, sort_keys=True)
+        last = getattr(self, "_week_sent", ("", 0))
+        if body == last[0] or time.time() - last[1] < 120:
+            return
+        self._week_sent = (body, time.time())
+        ntfy_publish_raw(self.cfg["admin_topic"] + "-week", body)
 
     def publish_roster(self, force=False):
         """أسماء اللاعبين وإعداداتهم لموقع المنظم (عشان رابط المنظم يبقى ثابت ويقدر يعدّل من الجوال)"""
@@ -3237,6 +3253,7 @@ class App:
                     self.backup_soon(0)
                     self.publish_roster()
                     self.publish_status()
+                    self.publish_week()
                     self.check_week()
                 self.root.after(1000, self.tick)
                 return
@@ -3257,6 +3274,8 @@ class App:
                 if self.grace_left is None:
                     self.state["used"][name] = self.state["used"].get(name, 0) + dt
                     self.state["week"][name] = self.state["week"].get(name, 0) + dt
+                    dk = f"{self.today()}|{name}"            # لتقرير الأسبوع: كل يوم لحاله
+                    self.state.setdefault("wd", {})[dk] = self.state["wd"].get(dk, 0) + dt
                     rem = self.remaining(name)
                     warn_s = int(self.cfg["warn_minutes"]) * 60
                     if self.is_open(name):
@@ -3279,6 +3298,8 @@ class App:
                 else:
                     self.grace_left -= dt
                     self.state["week"][name] = self.state["week"].get(name, 0) + dt
+                    dk = f"{self.today()}|{name}"            # لتقرير الأسبوع: كل يوم لحاله
+                    self.state.setdefault("wd", {})[dk] = self.state["wd"].get(dk, 0) + dt
                     if self.grace_left <= 0:
                         self.lock_now()
                 self.update_timer_ui()
@@ -3293,6 +3314,7 @@ class App:
                     self.refresh_lock()
                 self.publish_roster()
                 self.publish_status()
+                self.publish_week()
                 self.backup_soon(0)
                 self.check_week()
         except Exception as ex:  # ما نبي البرنامج يطيح
