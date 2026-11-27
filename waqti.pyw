@@ -32,14 +32,14 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 61
-CHANGES = ("🕌 الآيات في شاشة الصلاة صارت بالرسم العثماني كامل (مثل المصحف) بخط «أميري قرآن».")
+VERSION = 62
+CHANGES = ("🕌 الآيات في شاشة الصلاة صار فيها علامة نهاية الآية ورقمها (۝١ ۝٢ ...) مثل المصحف.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
 UPDATE_EVERY_SEC = 60
 MEDIA_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/media/"
-MEDIA_FILES = {"quran.mp3": 3600682, "mosque.png": 0, "adhan.mp3": 0, "quran_lines.json": 0, "AmiriQuran.ttf": 97932}   # الحجم 0 = أي حجم
+MEDIA_FILES = {"quran.mp3": 3600682, "mosque.png": 0, "adhan.mp3": 0, "quran_lines.json": 24285, "AmiriQuran.ttf": 97932}   # الحجم 0 = أي حجم
 PRAYER_NAMES = {"fajr": "الفجر", "dhuhr": "الظهر", "asr": "العصر", "maghrib": "المغرب", "isha": "العشاء"}
 
 try:
