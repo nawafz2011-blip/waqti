@@ -31,8 +31,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 57
-CHANGES = ("جديد: «🎤 رسالة صوتية» من جوال الكبير: صوته يشتغل على الكمبيوتر مع «أوكي» و«لا».")
+VERSION = 58
+CHANGES = ("جديد: «⛔ قفل الجهاز» من جوال الكبير: يقفل على الكل من وقت لين وقت، وبعدها يفتح بروحه.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -575,10 +575,10 @@ def load_config(fallback=None):
         if not cfg.get(k):
             cfg[k] = make()
             changed = True
-    if fresh:
-        cfg["_fresh"] = True             # انصنعت الحين: نشيك على النسخة الاحتياطية في القاعدة
     if changed:
         save_json(CONFIG_PATH, cfg, backup=True)
+    if fresh:
+        cfg["_fresh"] = True             # انصنعت الحين: نشيك على النسخة الاحتياطية في القاعدة (ما ينحفظ بالملف)
     return cfg
 
 
@@ -1591,7 +1591,10 @@ class App:
             if (len(mine) > 1 or (mine and self.is_free_account())) else self.cfg["players"]
         for i, p in enumerate(shown):
             rem = self.remaining(p["name"])
-            if p["name"] in (self.state.get("blocked") or []):
+            lu = self.lock_until()
+            if lu:
+                txt, color = f'{p["name"]}\n⛔ مقفل لين {self.lock_text(lu)}', BAD
+            elif p["name"] in (self.state.get("blocked") or []):
                 txt, color = f'{p["name"]}\nممنوع (المنظم)', BAD
             elif self.is_open(p["name"]):
                 txt, color = f'{p["name"]}\nوقت مفتوح', WARN
@@ -1628,6 +1631,8 @@ class App:
             rt = f"🏁 الكل خلص وقته · أول واحد يدخل يرجّع الوقت للكل (إلا {self.last_finisher()[0]})"
         else:
             rt = "دور جديد: الكل عنده وقته كامل"
+        if self.lock_until():
+            rt = f"⛔ الكبير قفل الجهاز على الكل · يفتح {self.lock_text(self.lock_until())}"
         if getattr(self, "pending_req", None):
             rt += "     ·     📨 بانتظار موافقة المنظم"
         self.round_lbl.configure(text=rt)
@@ -1687,6 +1692,10 @@ class App:
     def choose_player(self, name):
         p = self.player(name)
         if not p:
+            return
+        lu = self.lock_until()
+        if lu:
+            self.info("⛔ الجهاز مقفل", f"الكبير قفل الجهاز على الكل.\nيفتح {self.lock_text(lu)}")
             return
         self.save_state()                         # آخر الأوقات من الحسابات الثانية
         if p.get("pin"):
@@ -1765,10 +1774,29 @@ class App:
         return self.round_complete() and name in self.turn_players() and \
             name not in (self.state.get("blocked") or []) and self.last_wait_left(name) <= 0
 
+    def lock_until(self):
+        """قفل الجهاز من الجوال (مرة وحدة، على الكل): يرجع وقت الفتح لو الحين مقفول"""
+        w = self.cfg.get("lock_window") or {}
+        now = time.time() * 1000
+        try:
+            if w and float(w.get("from", 0)) <= now < float(w.get("until", 0)):
+                return float(w["until"]) / 1000
+        except Exception:
+            pass
+        return None
+
+    def lock_text(self, until):
+        d = datetime.datetime.fromtimestamp(until)
+        today = datetime.datetime.now().date()
+        day = "" if d.date() == today else "بكرة " if d.date() == today + datetime.timedelta(days=1) else d.strftime("%d/%m ")
+        return f"{day}{h12(d)}"
+
     def can_play(self, name):
         """الدور = الوقت: اللي خلص وقته ينتظر لين يخلص وقت الكل،
         وبعدها أي واحد يدخل يبدأ دور جديد، إلا آخر واحد لعب (لين تمر الساعات أو يبدأ غيره)"""
         if name in (self.state.get("blocked") or []):
+            return False
+        if self.lock_until():
             return False
         if self.round_complete():
             return self.can_open_round(name) or self.remaining(name) > 0 or self.is_open(name)
@@ -1929,6 +1957,18 @@ class App:
             if first:
                 self.do_punish(name)
             return f"⚖️ عقوبة كذب على {name}"
+        if op == "lockwin":                # قفل الجهاز على الكل من وقت لوقت (مرة وحدة)
+            if d.get("clear"):
+                self.cfg.pop("lock_window", None)
+                self.save_cfg()
+                return "✅ الكبير شال قفل الجهاز"
+            fr, un = int(d.get("from", 0)), int(d.get("until", 0))
+            if un <= max(fr, time.time() * 1000) or un - fr > 31 * 86400 * 1000:
+                return "❌ وقت الفتح لازم يكون بعد وقت القفل (وبحد أقصى شهر)"
+            self.cfg["lock_window"] = {"from": fr, "until": un}
+            self.save_cfg()
+            f_txt = "الحين" if fr <= time.time() * 1000 + 60000 else self.lock_text(fr / 1000)
+            return f"⛔ الكبير قفل الجهاز على الكل: من {f_txt} لين {self.lock_text(un / 1000)}"
         if op == "settings":
             new = {}
             for k, v in (d.get("set") or {}).items():
@@ -2184,7 +2224,9 @@ class App:
             st = ("blocked" if n in (self.state.get("blocked") or []) else "open" if self.is_open(n)
                   else "playing" if n in playing else "done" if n in self.state.get("round", []) else "idle")
             rows.append({"name": n, "state": st, "rem": int(max(0, self.remaining(n)))})
-        body = json.dumps({"ts": int(time.time()), "players": rows}, ensure_ascii=False)
+        lu = self.lock_until()
+        body = json.dumps({"ts": int(time.time()), "players": rows, "lock_until": int(lu) if lu else 0},
+                          ensure_ascii=False)
         if sync:                               # الكمبيوتر يطفي: نرسل على طول قبل لا يقفل البرنامج
             try:
                 fb_req("PUT", fb_path(self.cfg["admin_topic"] + "-status"), fb_entry(body), timeout=4)
@@ -2229,7 +2271,7 @@ class App:
                              "win": p.get("windows_user", "")} for p in self.cfg["players"]],
                 "settings": {k: self.cfg.get(k) for k in ("grace_minutes", "warn_minutes", "nobody_awake_per_day",
                                                           "day_start_hour", "last_wait_hours", "free_accounts")},
-                "accounts": accts}
+                "accounts": accts, "lock_window": self.cfg.get("lock_window")}
         body = json.dumps(info, ensure_ascii=False, sort_keys=True)
         key = hashlib.sha256(body.encode()).hexdigest()
         sent = self.state.get("roster_fb") or {}
@@ -2969,6 +3011,13 @@ class App:
                 if not self.active:
                     self.refresh_lock()
             name = self.active
+            if name and self.lock_until():
+                lu = self.lock_until()
+                self.log("lock_window", f"⛔ الجهاز انقفل على {name}: الكبير قفله لين {self.lock_text(lu)}", name, notify=True)
+                beep()
+                self.close_session()
+                self.info("⛔ الجهاز مقفل", f"الكبير قفل الجهاز على الكل.\nيفتح {self.lock_text(lu)}")
+                name = None
             if name:
                 if self.grace_left is None:
                     self.state["used"][name] = self.state["used"].get(name, 0) + dt

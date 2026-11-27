@@ -96,6 +96,8 @@
   .fld input, .fld select { width:120px; flex:0 0 auto; padding:9px; border-radius:8px; border:0; font:inherit; text-align:center; }
   .fld .hm { display:flex; gap:6px; } .fld .hm input { width:64px; }
   .fld.chk { justify-content:flex-start; } .fld.chk input { width:auto; }
+  .fld input.dt { width:200px; } .fld select { width:150px; }
+  .lockban { padding:10px; border-radius:10px; background:rgba(248,113,113,.15); color:#fca5a5; font-weight:800; text-align:center; margin-bottom:8px; }
   .live { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; }
   .live img { width:100%; border-radius:10px; background:#000; min-height:120px; }
   .live .lh { display:flex; justify-content:space-between; align-items:center; font-weight:700; }
@@ -139,6 +141,16 @@
   <section id="ctl" class="ctl" hidden>
     <div class="ctl-h">👑 تحكم المنظم</div>
     <div id="ppl" class="ppl"></div>
+    <button id="lockbtn" class="b all watch" type="button">⛔ قفل الجهاز على الكل (لين وقت)</button>
+    <div id="lockbox" class="pform" hidden>
+      <div class="sp-h">⛔ قفل الجهاز على الكل</div>
+      <div id="lockcur" class="st"></div>
+      <label class="fld">يقفل <select id="lk_mode"><option value="now">من الحين</option><option value="at">من وقت أختاره</option></select></label>
+      <label class="fld" id="lk_from_l" hidden>من <input id="lk_from" type="datetime-local" class="dt"></label>
+      <label class="fld">يفتح <input id="lk_until" type="datetime-local" class="dt"></label>
+      <div class="row"><button id="lk_go" class="b go" type="button">قفل</button><button id="lk_clear" class="b" type="button">🔓 شيل القفل</button></div>
+      <div id="lknote" class="st"></div>
+    </div>
     <button id="watchbtn" class="b all watch" type="button">📺 شوف شاشة الكمبيوتر (بث مباشر)</button>
     <button id="saybtn" class="b all say" type="button">💬 رسالة لشاشة الكمبيوتر</button>
     <button id="voicebtn" class="b all say" type="button">🎤 رسالة صوتية للكمبيوتر</button>
@@ -399,6 +411,11 @@
     }
     var nowS = document.getElementById("now"), nowl = document.getElementById("nowl"), nowt = document.getElementById("nowt");
     var lastStatus = null;
+    function fmtWhen(ms) {
+      var d = new Date(ms), t = new Date(), tm = new Date(); tm.setDate(t.getDate() + 1);
+      var day = d.toDateString() === t.toDateString() ? "" : d.toDateString() === tm.toDateString() ? "بكرة " : (d.getDate() + "/" + (d.getMonth() + 1) + " ");
+      return day + h12(d);
+    }
     function hmLeft(sec) { var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return h ? (h + " س " + m + " د") : (m + " د"); }
     function drawNow() {
       if (!lastStatus) return;
@@ -406,6 +423,10 @@
       var age = Math.max(0, Date.now() / 1000 - lastStatus.ts);
       // اللي يلعب يتحدث كل دقيقة. لو سكت الكمبيوتر أكثر من 3 دقايق: انطفى أو انقطع، فنوقف العداد
       var stale = age > 180 && lastStatus.players.some(function (p) { return p.state === "playing"; });
+      if (lastStatus.lock_until && lastStatus.lock_until * 1000 > Date.now()) {
+        var lb = document.createElement("div"); lb.className = "lockban";
+        lb.textContent = "⛔ الجهاز مقفل على الكل لين " + fmtWhen(lastStatus.lock_until * 1000); nowl.appendChild(lb);
+      }
       lastStatus.players.forEach(function (p) {
         if (stale && p.state === "playing") {
           var r0 = document.createElement("div"); r0.className = "nr";
@@ -440,7 +461,7 @@
     showPeople(saved.length ? saved : fromLink);
     var cfgInfo = null;
     fbValue(admin + "-roster", function (ev) { try { var info = JSON.parse(ev.message), last = info.roster;
-      if (info.players) { cfgInfo = info; drawSettings(); }
+      if (info.players) { cfgInfo = info; drawSettings(); if (!lockbox.hidden) drawLockCur(); }
       if (last && last.length) { try { localStorage.setItem(rkey, JSON.stringify(last)); } catch (e) {} showPeople(last); } } catch (e) {} });
     // ⚙️ الإعدادات من الجوال: كل تغيير ينرسل بأمر واحد (بالرمز)، والكمبيوتر يرسل الإعدادات الجديدة
     var setp = document.getElementById("setp"), splist = document.getElementById("splist"), pform = document.getElementById("pform");
@@ -504,6 +525,31 @@
         pform.hidden = true;
       });
     };
+    var lockbox = document.getElementById("lockbox"), lknote = document.getElementById("lknote");
+    function dtLocal(ms) { var d = new Date(ms - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); }
+    function drawLockCur() {
+      var w = cfgInfo && cfgInfo.lock_window, cur = document.getElementById("lockcur");
+      if (w && w.until > Date.now()) cur.textContent = (w.from > Date.now() ? "⏳ بيقفل " + fmtWhen(w.from) + " ويفتح " : "⛔ مقفل الحين، ويفتح ") + fmtWhen(w.until);
+      else cur.textContent = "الجهاز مفتوح الحين.";
+    }
+    document.getElementById("lockbtn").onclick = function () {
+      lockbox.hidden = !lockbox.hidden; if (lockbox.hidden) return;
+      var tm = new Date(); tm.setDate(tm.getDate() + 1); tm.setHours(16, 0, 0, 0);
+      document.getElementById("lk_until").value = dtLocal(tm.getTime());
+      document.getElementById("lk_from").value = dtLocal(Date.now() + 3600000);
+      lknote.textContent = ""; drawLockCur();
+    };
+    document.getElementById("lk_mode").onchange = function () { document.getElementById("lk_from_l").hidden = this.value !== "at"; };
+    document.getElementById("lk_go").onclick = function () {
+      var un = new Date(document.getElementById("lk_until").value).getTime();
+      var fr = document.getElementById("lk_mode").value === "at" ? new Date(document.getElementById("lk_from").value).getTime() : Date.now();
+      if (!un || isNaN(un) || un <= Math.max(fr, Date.now())) { lknote.className = "st bad"; lknote.textContent = "وقت الفتح لازم يكون بعد وقت القفل"; return; }
+      if (isNaN(fr)) { lknote.className = "st bad"; lknote.textContent = "اختر وقت القفل"; return; }
+      lknote.textContent = "";
+      confirmCfg({ op: "lockwin", from: Math.round(fr), until: Math.round(un) },
+        "⛔ تقفل الجهاز على الكل " + (fr > Date.now() + 60000 ? "من " + fmtWhen(fr) : "من الحين") + " لين " + fmtWhen(un) + "؟ (اللي يلعب يطلع)");
+    };
+    document.getElementById("lk_clear").onclick = function () { confirmCfg({ op: "lockwin", clear: true }, "🔓 تشيل قفل الجهاز؟"); };
     document.getElementById("s_save").onclick = function () {
       var set = {}, bad = false;
       SKEYS.forEach(function (k) { var v = document.getElementById("s_" + k).value.trim();
