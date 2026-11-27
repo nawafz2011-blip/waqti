@@ -32,8 +32,8 @@ import urllib.request
 IS_WIN = sys.platform.startswith("win")
 
 # ---- التحديث التلقائي: كل دقيقة يشيك على النسخة اللي في الرابط، وإذا أحدث يتحدث ويعيد تشغيل نفسه
-VERSION = 63
-CHANGES = ("📊 تقرير الأسبوع صار في جوال الكبير: كم لعب كل واحد هالأسبوع، كل يوم لحاله. وتقرير الجمعة يرن للمنظم.")
+VERSION = 64
+CHANGES = ("📊 تقارير الأسابيع كلها تنحفظ وما تنحذف، وتقدر تختار أي أسبوع من جوال الكبير.")
 MSGS_URL = "https://nawafz2011-blip.github.io/waqti/msgs.html"
 PAGES_URL = "https://nawafz2011-blip.github.io/waqti/"
 UPDATE_URL = "https://raw.githubusercontent.com/nawafz2011-blip/waqti/ccr-8b9f1bcf-7vtkhv/waqti.pyw"
@@ -2344,8 +2344,9 @@ class App:
             parts = sorted(info["week"].items(), key=lambda kv: -kv[1])
             lines = "، ".join(f"{n} {dur(round(sec / 60))}" for n, sec in parts if sec >= 60)
             self.log("report", f"📊 تقرير الأسبوع: {lines or 'ما أحد لعب'}", notify=True, admin=True)
-            ntfy_publish_raw(self.cfg["admin_topic"] + "-weeklast", json.dumps(
-                {"week_id": info["old"], "week": info["week"], "wd": info["wd"]}, ensure_ascii=False))
+            body = json.dumps({"week_id": info["old"], "week": info["week"], "wd": info["wd"]}, ensure_ascii=False)
+            ntfy_publish_raw(self.cfg["admin_topic"] + "-weeklast", body)
+            ntfy_publish_raw(self.cfg["admin_topic"] + "-weeks/" + info["old"], body)   # أرشيف كل الأسابيع: ما ينحذف
 
     def publish_week(self):
         """أوقات الأسبوع لصفحة المنظم (زر «📊 تقرير الأسبوع»): كل دقيقتين لو تغيّرت"""
@@ -2356,6 +2357,8 @@ class App:
             return
         self._week_sent = (body, time.time())
         ntfy_publish_raw(self.cfg["admin_topic"] + "-week", body)
+        if self.state.get("week_id"):
+            ntfy_publish_raw(self.cfg["admin_topic"] + "-weeks/" + self.state["week_id"], body)
 
     def publish_roster(self, force=False):
         """أسماء اللاعبين وإعداداتهم لموقع المنظم (عشان رابط المنظم يبقى ثابت ويقدر يعدّل من الجوال)"""

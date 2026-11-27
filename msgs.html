@@ -149,7 +149,7 @@
     <div id="ppl" class="ppl"></div>
     <button id="weekbtn" class="b all" type="button">📊 تقرير الأسبوع</button>
     <div id="weekbox" class="pform" hidden>
-      <div class="wtabs"><button id="wk_now" class="b on" type="button">هالأسبوع</button><button id="wk_last" class="b" type="button">الأسبوع اللي فات</button></div>
+      <label class="fld">الأسبوع <select id="wk_sel" style="width:210px"><option value="now">هالأسبوع</option></select></label>
       <div id="wk_body"></div>
     </div>
     <button id="lockbtn" class="b all watch" type="button">⛔ قفل الجهاز على الكل (لين وقت)</button>
@@ -542,7 +542,7 @@
     function hmS(sec) { var m = Math.round(sec / 60); return m < 1 ? "—" : Math.floor(m / 60) + ":" + ("0" + (m % 60)).slice(-2); }
     function drawWeek() {
       var d = wkData[wkShow];
-      if (!d || !d.week_id) { wkBody.innerHTML = '<div class="st">' + (wkShow === "now" ? "ننتظر من الكمبيوتر… (نسخته لازم 63 أو أكثر)" : "ما فيه تقرير للأسبوع اللي فات للحين") + "</div>"; return; }
+      if (!d || !d.week_id) { wkBody.innerHTML = '<div class="st">' + (wkShow === "now" ? "ننتظر من الكمبيوتر… (نسخته لازم 64 أو أكثر)" : "ما فيه بيانات لهالأسبوع") + "</div>"; return; }
       var names = Object.keys(d.week || {});
       (cfgInfo && cfgInfo.roster || []).forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); });
       var start = new Date(d.week_id + "T12:00:00"), todayKey = new Date(Date.now() - 4 * 3600000);
@@ -562,11 +562,32 @@
       wkBody.innerHTML = ""; wkBody.appendChild(t);
       var note = document.createElement("div"); note.className = "st"; note.textContent = "بالساعات:الدقايق · الأصفر أكثر واحد لعب"; wkBody.appendChild(note);
     }
-    fbValue(admin + "-week", function (ev) { try { wkData.now = JSON.parse(ev.message); if (!weekbox.hidden) drawWeek(); } catch (e) {} });
-    fbValue(admin + "-weeklast", function (ev) { try { wkData.last = JSON.parse(ev.message); if (!weekbox.hidden) drawWeek(); } catch (e) {} });
-    document.getElementById("weekbtn").onclick = function () { weekbox.hidden = !weekbox.hidden; if (!weekbox.hidden) drawWeek(); };
-    ["now", "last"].forEach(function (k) { document.getElementById("wk_" + k).onclick = function () {
-      wkShow = k; document.getElementById("wk_now").className = "b" + (k === "now" ? " on" : ""); document.getElementById("wk_last").className = "b" + (k === "last" ? " on" : ""); drawWeek(); }; });
+    // ما نفتح اتصال دايم للتقرير (المتصفح يسمح بـ6 اتصالات بس للقاعدة): نجيبه لما تفتحه
+    function getJSON(path) { return fetch(FB + path + ".json").then(function (r) { return r.json(); }); }
+    function loadNow() {
+      return getJSON(fk(admin + "-week")).then(function (v) { wkData.now = v && v.m ? JSON.parse(v.m) : null; if (wkShow === "now") drawWeek(); }).catch(function () {});
+    }
+    // أرشيف الأسابيع (ما ينحذف): نجيب أسماء الأسابيع، ولما تختار أسبوع نجيبه
+    var wkSel = document.getElementById("wk_sel"), WKP = FB + fk(admin + "-weeks");
+    function loadWeeks() {
+      fetch(WKP + ".json?shallow=true").then(function (r) { return r.json(); }).then(function (keys) {
+        var cur = wkData.now && wkData.now.week_id, list = Object.keys(keys || {}).filter(function (k) { return k !== cur; }).sort().reverse();
+        wkSel.innerHTML = '<option value="now">هالأسبوع</option>';
+        list.forEach(function (k) { var o = document.createElement("option"), d = new Date(k + "T12:00:00"), e = new Date(d.getTime() + 6 * 86400000);
+          o.value = k; o.textContent = d.getDate() + "/" + (d.getMonth() + 1) + " ← " + e.getDate() + "/" + (e.getMonth() + 1) + "/" + e.getFullYear(); wkSel.appendChild(o); });
+        if (wkShow !== "now") wkSel.value = wkShow;
+      }).catch(function () {});
+    }
+    wkSel.onchange = function () {
+      wkShow = wkSel.value; if (wkShow === "now") { drawWeek(); loadNow(); return; }
+      wkBody.innerHTML = '<div class="st">يحمّل…</div>';
+      fetch(WKP + "/" + wkShow + ".json").then(function (r) { return r.json(); }).then(function (v) {
+        wkData[wkShow] = v && v.m ? JSON.parse(v.m) : null; drawWeek(); }).catch(function () { wkBody.innerHTML = '<div class="st bad">ما قدر يحمّل</div>'; });
+    };
+    document.getElementById("weekbtn").onclick = function () {
+      weekbox.hidden = !weekbox.hidden; if (weekbox.hidden) return;
+      wkShow = "now"; wkSel.value = "now"; drawWeek(); loadNow().then(loadWeeks);
+    };
     var lockbox = document.getElementById("lockbox"), lknote = document.getElementById("lknote");
     function dtLocal(ms) { var d = new Date(ms - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); }
     function drawLockCur() {
